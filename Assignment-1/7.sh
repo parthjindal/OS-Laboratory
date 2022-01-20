@@ -7,8 +7,7 @@ do echo -n "$((RANDOM % 100 + 1))," >>$1
 done
 arr=$(awk -F ',' "{print \$$2}" $1)
 for i in $arr
-do  echo $i
-    if [[ $i =~ $3 ]]
+do  if [[ $i =~ $3 ]]
     then echo "YES"
          exit 0
     fi
