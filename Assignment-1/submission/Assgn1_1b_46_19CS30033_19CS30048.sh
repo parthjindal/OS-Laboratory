@@ -1,0 +1,1 @@
+b=$'\u0020';a="DIR=\"./1.b.files\";OUT_DIR=\"./1.b.out\";if${b}[${b}!${b}-d${b}\$OUT_DIR${b}]${b};then${b}mkdir${b}\$OUT_DIR;fi;ls${b}\$DIR${b}|${b}xargs${b}-I${b}{}${b}-P${b}4${b}sort${b}-n${b}\$DIR/{}${b}-o${b}\$OUT_DIR/{};sort${b}-n${b}-m${b}\$OUT_DIR/*${b}|${b}uniq${b}-c${b}|${b}awk${b}'{print${b}\$2,\$1}'${b}>${b}\$OUT_DIR/1.b.out.txt;";eval $a

@@ -1,1 +1,7 @@
-b=" ";DIR="./1.b.files";OUT_DIR="./1.b.out";a="if${b}[${b}!${b}-d${b}"\$OUT_DIR"${b}];${b}then${b}mkdir${b}\$OUT_DIR;fi;ls${b}\$DIR${b}|${b}xargs${b}-I${b}{}${b}-P${b}4${b}sort${b}-n${b}\$DIR/{}${b}-o${b}\$OUT_DIR/{};sort${b}-n${b}-m${b}\$OUT_DIR/*${b}|${b}uniq${b}-c${b}|${b}awk${b}'{print${b}\$2,\$1}'${b}>${b}\$OUT_DIR/1.b.out.txt;";eval $a
+DIR="./1.b.files"
+OUT_DIR="./1.b.out"
+if [ ! -d $OUT_DIR ] 
+then mkdir $OUT_DIR
+fi
+ls $DIR | xargs -I {} -P 4 sort -n $DIR/{} -o $OUT_DIR/{}
+sort -n -m $OUT_DIR/* | uniq -c | awk '{print $2,$1}' > $OUT_DIR/1.b.out.txt

@@ -1,13 +1,11 @@
-mapfile -d $'\0' array < <(find ./Input -name '*.*' -type f -print0 | sed -z 's/.*\.//g')
-declare -A b
-for i in "${array[@]}"; do b["$i"]=1; done
-
-for i in "${!b[@]}"
-do
-    echo $i
-    mkdir -p ./Output/"$i"
-    find ./Input -name "*.$i" -type f -exec mv -t ./Output/"$i" {} +
+INP_DIR="./data"
+arr=($(find ${INP_DIR} -type f -name "*.*" | perl -ne 'print $1 if m/\.([^.\/]+)$/' | sort -u))
+printf '%s\n' "${arr[@]}" | xargs -I {} mkdir -p ./Output/{}
+for i in "${arr[@]}"
+do find ${INP_DIR} -type f -name "*.$i" -exec mv -t ./Output/$i {} +
 done
-
 mkdir -p ./Output/Nil
-find ./Input -name "*" -type f -exec mv -t ./Output/Nil {} +
+find ${INP_DIR} -name "*" -type f -exec mv -t ./Output/Nil {} +
+rm -rf ${INP_DIR}/*
+mv ./Output/* ${INP_DIR}/
+rm -rf ./Output

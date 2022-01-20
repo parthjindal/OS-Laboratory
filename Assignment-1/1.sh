@@ -1,1 +1,9 @@
-b=" ";a="N=\$1;ans=();for$b((i=2;i<=\$N;i++));do${b}while$b((\$N%\$i==0));do${b}ans+=(\$i);N=\$((\$N/\$i));done;done;echo$b\${ans[@]}";eval $a
+N=$1
+ans=()
+for ((i = 2; i <= $N; i++))
+do while (($N % $i == 0))
+do ans+=($i)
+   N=$(($N / $i))
+   done
+done
+echo ${ans[@]}

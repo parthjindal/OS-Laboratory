@@ -1,0 +1,1 @@
+b=$'\u0020';a="N=\$1;ans=();for${b}((i${b}=${b}2;${b}i${b}<=${b}\$N;${b}i++));do${b}while${b}((\$N${b}%${b}\$i${b}==${b}0));do${b}ans+=(\$i);${b}N=\$((\$N${b}/${b}\$i));${b}done;done;echo${b}\${ans[@]};";eval $a

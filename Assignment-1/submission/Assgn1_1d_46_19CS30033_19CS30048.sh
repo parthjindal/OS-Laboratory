@@ -1,0 +1,1 @@
+b=$'\u0020';a="mkdir${b}-p${b}files_mod;for${b}FILE${b}in${b}temp/*;do${b}f=\"\$(basename${b}--${b}\$FILE)\";${b}awk${b}'BEGIN{i=1}${b}/.*/{printf${b}\"%d${b}%${b}s\n\",i,\$0;${b}i++}'${b}temp/\$f${b}|${b}tr${b}'${b}'${b}','${b}>${b}files_mod/\$f;done";eval $a
