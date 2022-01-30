@@ -250,19 +250,26 @@ int main() {
                     setpgid(pid, fpgid);
                     tcsetpgrp(STDIN_FILENO, pid);
 
-                    
-
+                    if (i) {
+                        close(pfd[0]);
+                        close(pfd[1]);
+                    }
+                    pfd[0] = newpfd[0];
+                    pfd[1] = newpfd[1];
                 } else
                     setpgid(pid, fpgid);
-                in = pipefd[0];
             }
         }
         pid_t lastpid;
         pid_t pid = fork();
+
+        int in = pfd[0];
         if (pid == 0) {
             cmd_end->open_fds();
+            
             dup2(in, STDIN_FILENO);
-            // dup2(cmd_end->fd_out, STDOUT_FILENO);
+            close(in);
+            close(pfd[1]);
 
             if (num_cmds > 1)
                 setpgid(getpid(), fpgid);
