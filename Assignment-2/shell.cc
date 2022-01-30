@@ -37,6 +37,7 @@ class Command {
 
     Command(const string& _cmd)
         : cmd(_cmd), bg(false), fd_in(0), fd_out(1), fd_err(2) {
+        fd_in_name = fd_out_name = fd_err_name = "";
     }
     ~Command() {
         // clean up file descriptors
@@ -157,6 +158,7 @@ int main() {
 
     sigaction(SIGTSTP, &sig_act, NULL);
     sigaction(SIGINT, &sig_act, NULL);
+
     signal(SIGTTOU, SIG_IGN);
 
     // add a handler for
@@ -179,80 +181,115 @@ int main() {
         //     continue;
         // }
 
-        int fpgid = 0;
-        int in = 0;
-        pid_t pid = fork();
-        if (pid == 0) {
-            signal(SIGINT, SIG_DFL);
-            signal(SIGTSTP, SIG_DFL);
-
-            Command* cmd = cmd_begin;
-            cmd->open_fds();  // io redirection
-            setpgrp();
-            tcsetpgrp(STDIN_FILENO, getpgrp());
-
-            auto args = cmd->c_str();
-            execvp(args[0], &args[0]);
-            perror("execvp");
-            exit(1);
-        } else {
-            setpgid(pid, pid);
-            tcsetpgrp(STDIN_FILENO, getpgrp());
-            if (!cmd_begin->bg) {
-                waitpid(pid, NULL, WUNTRACED);
-            }
-        }
-        tcsetpgrp(STDIN_FILENO, getpid());
-
-        // for (int i = 0; i < num_cmds - 1; i++) {
-        //     pipe(pipefd);
-        //     pid_t pid = fork();
-        //     if (pid == 0) {  // child
-        //         Command* curr = cmds[i];
-        //         curr->open_fds();
-        //         dup2(curr->fd_out, pipefd[1]);
-        //         dup2(curr->fd_in, in);
-        //         if (i == 0)
-        //             setpgrp();
-        //         else
-        //             setpgid(getpid(), fpgid);
-
-        //         signal(SIGINT, SIG_DFL);
-        //         signal(SIGTSTP, SIG_DFL);
-
-        //         auto args = cmds[i]->c_str();
-        //         execvp(args[0], &args[0]);
-        //         perror("execvp");
-        //         exit(1);  // exec error
-        //     } else {
-        //         if (i == 0) {
-        //             fpgid = pid;
-        //             tcsetpgrp(STDIN_FILENO, pid);
-        //         }
-        //         fg_pids.push_back(pid);
-        //         setpgid(pid, fpgid);
-        //         in = pipefd[0];
-        //     }
-        // }
+        // int fpgid = 0;
+        // int in = 0;
         // pid_t pid = fork();
         // if (pid == 0) {
-        //     dup2(cmd_end->fd_in, in);
-        //     dup2(cmd_end->fd_out, STDOUT_FILENO);
-        //     setpgid(getpid(), fpgid);
         //     signal(SIGINT, SIG_DFL);
         //     signal(SIGTSTP, SIG_DFL);
 
-        //     auto args = cmd_end->c_str();
+        //     Command* cmd = cmd_begin;
+        //     cmd->open_fds();  // io redirection
+        //     setpgrp();
+        //     tcsetpgrp(STDIN_FILENO, getpgrp());
+
+        //     auto args = cmd->c_str();
         //     execvp(args[0], &args[0]);
         //     perror("execvp");
-        //     exit(1);  // exec error
+        //     exit(1);
         // } else {
-        //     fg_pids.push_back(pid);
-        //     setpgid(pid, fpgid);
+        //     setpgid(pid, pid);
+        //     tcsetpgrp(STDIN_FILENO, getpgrp());
+        //     if (!cmd_begin->bg) {
+        //         waitpid(pid, NULL, WUNTRACED);
+        //     }
         // }
+        // tcsetpgrp(STDIN_FILENO, getpid());
 
-        // waitpid(-fpgid, NULL, WUNTRACED);
+        int in = 0;
+        int fpgid;
+        int pfd[2];
+        int newpfd[2];
+
+        for (int i = 0; i < num_cmds - 1; i++) {
+            pipe(newpfd);
+            // DEBUG_LOG("pipfd: %d, %d\n", pipefd[0], pipefd[1]);
+            pid_t pid = fork();
+
+            if (pid == 0) {  // child
+                Command* curr = cmds[i];
+                curr->open_fds();
+
+                if (i) {  // input pipe
+                    close(pfd[1]);
+                    dup2(pfd[0], STDIN_FILENO);
+                    close(pfd[0]);
+                }
+                close(newpfd[0]);
+                dup2(newpfd[1], STDOUT_FILENO);
+                close(newpfd[1]);
+
+                if (i == 0)
+                    setpgrp();
+                else
+                    setpgid(getpid(), fpgid);
+
+                signal(SIGINT, SIG_DFL);
+                signal(SIGTSTP, SIG_DFL);
+
+                DEBUG_LOG("child: %d, group: %d\n", getpid(), getpgrp());
+
+                auto args = cmds[i]->c_str();
+                execvp(args[0], &args[0]);
+                perror("execvp");
+                exit(1);  // exec error
+
+            } else {
+                if (i == 0) {
+                    fpgid = pid;
+                    setpgid(pid, fpgid);
+                    tcsetpgrp(STDIN_FILENO, pid);
+
+                    
+
+                } else
+                    setpgid(pid, fpgid);
+                in = pipefd[0];
+            }
+        }
+        pid_t lastpid;
+        pid_t pid = fork();
+        if (pid == 0) {
+            cmd_end->open_fds();
+            dup2(in, STDIN_FILENO);
+            // dup2(cmd_end->fd_out, STDOUT_FILENO);
+
+            if (num_cmds > 1)
+                setpgid(getpid(), fpgid);
+            else
+                setpgrp();
+
+            signal(SIGINT, SIG_DFL);
+            signal(SIGTSTP, SIG_DFL);
+
+            DEBUG_LOG("child: %d, group: %d\n", getpid(), getpgrp());
+
+            auto args = cmd_end->c_str();
+            execvp(args[0], &args[0]);
+            perror("execvp");
+            exit(1);  // exec error
+        } else {
+            if (num_cmds == 1)
+                fpgid = pid;
+            setpgid(pid, fpgid);
+            if (num_cmds == 1)
+                tcsetpgrp(STDIN_FILENO, fpgid);
+        }
+        lastpid = pid;
+
+        waitpid(lastpid, NULL, WUNTRACED);
         tcsetpgrp(STDIN_FILENO, getpid());
+
         // int pipe[2];
         // for (Command* cmd : cmds) {
         // }
