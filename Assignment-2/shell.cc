@@ -222,7 +222,7 @@ int main() {
             continue;
         Command* cmd_begin = cmds[0];
         Command* cmd_end = cmds[num_cmds - 1];
-        
+
         if (cmd_begin->cmd == "exit") {
             break;
         }
@@ -274,10 +274,15 @@ int main() {
             tcsetpgrp(STDIN_FILENO, getpid());
             continue;
         }
+
         int fpgid = 0;  // fg process group id
         int pipefd[2];
         int prevfd[2];
         toggleSIGCHLDBlock(SIG_BLOCK);
+
+        if (cmd_begin->argv[0] == "mulitwatch") {
+            // workflow: fork for cmd1, cmd2, cmd3, cmd4, etc
+        }
 
         for (int i = 0; i < num_cmds; i++) {
             if (i < num_cmds - 1)
@@ -349,10 +354,9 @@ int main() {
     }
 }
 
-
 /**
  * @brief TODO: 1. add cd builtin.
  *              2. add autocomplete
  *              3. multiwatch
- * 
+ *              4. history search
  */
