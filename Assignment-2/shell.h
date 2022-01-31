@@ -12,6 +12,10 @@
 #define GREEN "\033[0;32m"
 #define RESET "\033[0m"
 
+#define HISTORY_FILE ".terminal_history.txt"
+#define HISTORY_SIZE 10000
+#define HISTORY_PRINT 1000
+
 FILE* _logFp = NULL;
 void initLogger(const char* logFile) {
     _logFp = logFile ? fopen(logFile, "w") : stdout;
