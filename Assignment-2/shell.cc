@@ -290,10 +290,6 @@ int main() {
     sigaction(SIGINT, &sig_act, NULL);
     signal(SIGTTOU, SIG_IGN);
 
-    initialise_history();
-    print_history();
-    search_history();
-
     while (!cin.eof()) {
         prompt(inp);
         if (num_cmds == 0)
