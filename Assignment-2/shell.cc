@@ -206,6 +206,76 @@ static void handleSIGINT(int sig) {
     std::cin.setstate(std::ios::badbit);
 }
 
+deque <char *> history;
+int history_size;
+
+void initialise_history() {
+    int history_file = open(".terminal_history.txt", O_RDONLY | O_CREAT, 0644);
+    FILE* fp = fdopen(history_file, "r");
+    char buff[1000];
+    while (fgets(buff, 1000, fp)) {
+        buff[strcspn(buff, "\n")] = 0;
+        history.push_back(strdup(buff));
+    }
+    history_size = history.size();
+    while(history.size() > HISTORY_SIZE) {
+        free(history.front());
+        history.pop_front();
+    }
+    fclose(fp);
+}
+
+void update_history(char *cmd) {
+    history.push_back(strdup(cmd));
+    history_size++;
+    while(history_size  > HISTORY_SIZE) {
+        free(history.front());
+        history.pop_front();
+        history_size--;
+    }
+}
+
+void print_history() {
+    int read = HISTORY_PRINT;
+    cout << "History Size: " << history_size << endl;
+    cout << "History: " << endl;
+    if(history_size < HISTORY_PRINT)
+        read = history_size;
+    for(int i = 1; i <= read; i++) {
+        cout << history[history_size - i] << endl;
+    }
+}
+
+void search_history() {
+    if(history_size == 0) {
+        cout << "No history found" << endl;
+        return;
+    }
+    cout << "Enter Search Term: ";
+    char * search_term = (char *)malloc(sizeof(char) * 1000);
+    scanf("%[^\n]", search_term);
+    getchar();
+    int flag = 0;
+    for(auto it = rbegin(history); it != rend(history) && (!flag); it++) {
+        if(strstr(*it, search_term)) {
+            cout << *it << endl;
+            flag = 1;
+        }
+    }
+    if(!flag) {
+        cout << "No match for search term in history" << endl;
+    }
+}
+
+void clean_history(){
+    int history_file = open(".terminal_history.txt", O_WRONLY);
+    FILE* fp = fdopen(history_file, "w");  
+    for(int i = 0; i < history.size(); i++){
+        fprintf(fp, "%s\n", history[i]);
+    }
+    fclose(fp);
+}
+
 int main() {
     std::string inp;
 
@@ -219,6 +289,10 @@ int main() {
     sigaction(SIGTSTP, &sig_act, NULL);
     sigaction(SIGINT, &sig_act, NULL);
     signal(SIGTTOU, SIG_IGN);
+
+    initialise_history();
+    print_history();
+    search_history();
 
     while (!cin.eof()) {
         prompt(inp);
