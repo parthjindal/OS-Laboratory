@@ -167,12 +167,12 @@ static void reap(int sig) {
         if (pid <= 0) break;
         int jidx = proc2job[pid];
         if (WIFSTOPPED(status)) {
-            cout << "\n[pid: " << pid << ", gpid:" << jobs[jidx].pgid << "] stopped " << endl;
+            cout << "[" << jobs[jidx].pgid << "] stopped" << endl;
             jobs[jidx].status = STOPPED;
         } else if (WIFSIGNALED(status) || WIFEXITED(status)) {
             jobs[jidx].status = DONE;
         } else if (WIFCONTINUED(status)) {
-            cout << "\n[pid: " << pid << ", gpid:" << jobs[jidx].pgid << "] continued" << endl;
+            cout << "[" << jobs[jidx].pgid << "] continued" << endl;
             jobs[jidx].status = RUNNING;
             jobs[jidx]._cnt = (int)jobs[jidx].processes.size();
         }
@@ -222,7 +222,7 @@ int main() {
             continue;
         Command* cmd_begin = cmds[0];
         Command* cmd_end = cmds[num_cmds - 1];
-
+        
         if (cmd_begin->cmd == "exit") {
             break;
         }
@@ -239,12 +239,34 @@ int main() {
             continue;
         }
         if (cmd_begin->argv[0] == "bg") {
-            pid_t gpid = atoi(cmd_begin->argv[1].c_str());
+            pid_t gpid = atoi(cmd_begin->argv[1].c_str());  // gpid is the pgid of the job
+            bool f = 0;
+            for (auto it = jobs.rbegin(); it != jobs.rend(); it++) {
+                if (it->pgid == gpid && it->status == STOPPED) {
+                    f = 1;
+                    break;
+                }
+            }
+            if (!f) {
+                cout << "No such job" << endl;
+                continue;
+            }
             kill(-gpid, SIGCONT);
             continue;
         }
         if (cmd_begin->argv[0] == "fg") {
-            pid_t gpid = atoi(cmd_begin->argv[1].c_str());
+            pid_t gpid = atoi(cmd_begin->argv[1].c_str());  // check if gpid is valid or not
+            bool f = 0;
+            for (auto it = jobs.rbegin(); it != jobs.rend(); it++) {
+                if (it->pgid == gpid && it->status == STOPPED) {
+                    f = 1;
+                    break;
+                }
+            }
+            if (!f) {
+                cout << "No such job" << endl;
+                continue;
+            }
             toggleSIGCHLDBlock(SIG_BLOCK);
             tcsetpgrp(STDIN_FILENO, gpid);
             kill(-gpid, SIGCONT);
@@ -317,11 +339,20 @@ int main() {
         jobs.back()._cnt = num_cmds;
         if (cmds.back()->bg == false) {
             waitFg(fpgid);
-            // if (jobs.back().status == STOPPED) {
-            //     kill(-fpgid, SIGCONT);
-            // }
+            // toggle to send SIGCONT instantly
+            /* if (jobs.back().status == STOPPED) {
+                kill(-fpgid, SIGCONT);
+            } */
         } else
             toggleSIGCHLDBlock(SIG_UNBLOCK);
         tcsetpgrp(STDIN_FILENO, getpid());
     }
 }
+
+
+/**
+ * @brief TODO: 1. add cd builtin.
+ *              2. add autocomplete
+ *              3. multiwatch
+ * 
+ */
