@@ -11,10 +11,24 @@
 #include <iostream>
 #include <list>
 #include <map>
+#include <set>
 #include <stdexcept>
 #include <vector>
 
 using namespace std;
+
+#define RUNNING 0
+#define STOPPED 1
+#define DONE 2
+
+string getStatus(int status) {
+    if (status == RUNNING)
+        return "running";
+    else if (status == STOPPED)
+        return "stopped";
+    else
+        return "done";
+}
 
 vector<string> tokenize(const string& _cmd, char delim) {
     vector<string> argv;
@@ -28,16 +42,15 @@ vector<string> tokenize(const string& _cmd, char delim) {
 
 class Command {
    public:
-    string cmd;  // command after substitution
-    vector<string> argv;
+    string cmd;           // command string
+    vector<string> argv;  // arguments
     int argc;
     bool bg;
-    int fd_in, fd_out, fd_err;  // file descriptors
-    string fd_in_name, fd_out_name, fd_err_name;
+    int fd_in, fd_out;
+    string fd_in_name, fd_out_name;
 
-    Command(const string& _cmd)
-        : cmd(_cmd), bg(false), fd_in(0), fd_out(1), fd_err(2) {
-        fd_in_name = fd_out_name = fd_err_name = "";
+    Command(const string& _cmd) : cmd(_cmd), bg(false), fd_in(0), fd_out(1) {
+        fd_in_name = fd_out_name = "";
     }
     ~Command() {
         // clean up file descriptors
@@ -73,7 +86,7 @@ class Command {
         return os;
     }
 
-    vector<char*> c_str() {
+    vector<char*> vc_str() {
         vector<char*> _args;
         for (int i = 0; i < argc; i++) {
             char* tmp = new char[argv[i].length() + 1];
@@ -87,38 +100,36 @@ class Command {
     void open_fds() {
         if (fd_in_name != "") {
             fd_in = open(fd_in_name.c_str(), O_RDONLY);
-            if (fd_in == -1) {
-                perror("open");
-                exit(1);
-            }
             dup2(fd_in, STDIN_FILENO);
         }
         if (fd_out_name != "") {
             fd_out = open(fd_out_name.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0700);
-            if (fd_out == -1) {
-                perror("open");
-                exit(1);
-            }
             dup2(fd_out, STDOUT_FILENO);
         }
     }
+};
+vector<Command*> cmds;
 
-    void set_fd_in(int fd) {
-        if (fd_in != 0) close(fd_in);
-        fd_in = fd;
-    }
+struct Process {
+    int pid;
+    string cmd;
+};
 
-    void set_fd_out(int fd) {
-        if (fd_out != 1) close(fd_out);
-        fd_out = fd;
+struct Job {
+    pid_t pgid;
+    vector<Process> processes;
+    int _cnt;
+    int status;
+    Job(pid_t _pgid) : pgid(_pgid) {
+        _cnt = 0;
+        status = RUNNING;
     }
 };
-typedef pair<int, int> job_t;  // <pid,status>
 
-map<int, job_t> bg_jobs;
-vector<Command*> cmds;
+map<int, int> proc2job;
+vector<Job> jobs;
+
 int num_cmds = 0;
-
 void prompt(string& inp) {
     for (int i = 0; i < num_cmds; i++) {
         delete cmds[i];
@@ -148,8 +159,53 @@ void prompt(string& inp) {
     num_cmds = cmds.size();
 }
 
+static pid_t fgpid = 0;
+static void reap(int sig) {
+    while (1) {
+        int status;
+        pid_t pid = waitpid(-1, &status, WNOHANG | WUNTRACED | WCONTINUED);
+        if (pid <= 0) break;
+        int jidx = proc2job[pid];
+        if (WIFSTOPPED(status)) {
+            cout << "\n[pid: " << pid << ", gpid:" << jobs[jidx].pgid << "] stopped " << endl;
+            jobs[jidx].status = STOPPED;
+        } else if (WIFSIGNALED(status) || WIFEXITED(status)) {
+            jobs[jidx].status = DONE;
+        } else if (WIFCONTINUED(status)) {
+            cout << "\n[pid: " << pid << ", gpid:" << jobs[jidx].pgid << "] continued" << endl;
+            jobs[jidx].status = RUNNING;
+            jobs[jidx]._cnt = (int)jobs[jidx].processes.size();
+        }
+        if (jobs[jidx].pgid == fgpid && !WIFCONTINUED(status)) {
+            jobs[jidx]._cnt--;
+            if (jobs[jidx]._cnt == 0) {
+                fgpid = 0;
+            }
+        }
+    }
+}
+
+static void toggleSIGCHLDBlock(int how) {
+    sigset_t mask;
+    sigemptyset(&mask);
+    sigaddset(&mask, SIGCHLD);
+    sigprocmask(how, &mask, NULL);
+}
+
+static void waitFg(pid_t pid) {
+    fgpid = pid;
+    sigset_t empty;
+    sigemptyset(&empty);
+    while (fgpid == pid) {
+        sigsuspend(&empty);
+    }
+    toggleSIGCHLDBlock(SIG_UNBLOCK);
+}
+
 int main() {
-    string inp;
+    std::string inp;
+
+    signal(SIGCHLD, reap);
 
     struct sigaction sig_act;
     sig_act.sa_handler = SIG_IGN;
@@ -158,248 +214,114 @@ int main() {
 
     sigaction(SIGTSTP, &sig_act, NULL);
     sigaction(SIGINT, &sig_act, NULL);
-
     signal(SIGTTOU, SIG_IGN);
-
-    // add a handler for
 
     while (!cin.eof()) {
         prompt(inp);
         if (num_cmds == 0)
             continue;
-
         Command* cmd_begin = cmds[0];
         Command* cmd_end = cmds[num_cmds - 1];
 
         if (cmd_begin->cmd == "exit") {
             break;
         }
-        // if (cmd_begin->cmd == "jobs") {
-        //     for (int i = 0; i < int(bg_pids.size()); i++) {
-        //         cout << "[" << i << "] " << bg_pids[i] <<
-        //     }
-        //     continue;
-        // }
-
-        // int fpgid = 0;
-        // int in = 0;
-        // pid_t pid = fork();
-        // if (pid == 0) {
-        //     signal(SIGINT, SIG_DFL);
-        //     signal(SIGTSTP, SIG_DFL);
-
-        //     Command* cmd = cmd_begin;
-        //     cmd->open_fds();  // io redirection
-        //     setpgrp();
-        //     tcsetpgrp(STDIN_FILENO, getpgrp());
-
-        //     auto args = cmd->c_str();
-        //     execvp(args[0], &args[0]);
-        //     perror("execvp");
-        //     exit(1);
-        // } else {
-        //     setpgid(pid, pid);
-        //     tcsetpgrp(STDIN_FILENO, getpgrp());
-        //     if (!cmd_begin->bg) {
-        //         waitpid(pid, NULL, WUNTRACED);
-        //     }
-        // }
-        // tcsetpgrp(STDIN_FILENO, getpid());
-
-        int in = 0;
-        int fpgid;
-        int pfd[2];
-        int newpfd[2];
-
-        for (int i = 0; i < num_cmds - 1; i++) {
-            pipe(newpfd);
-            // DEBUG_LOG("pipfd: %d, %d\n", pipefd[0], pipefd[1]);
-            pid_t pid = fork();
-
-            if (pid == 0) {  // child
-                Command* curr = cmds[i];
-                curr->open_fds();
-
-                if (i) {  // input pipe
-                    close(pfd[1]);
-                    dup2(pfd[0], STDIN_FILENO);
-                    close(pfd[0]);
+        if (cmd_begin->cmd == "jobs") {
+            for (auto it = jobs.begin(); it != jobs.end(); it++) {
+                cout << it->pgid << ": " << getStatus(it->status) << "\n";
+                for (auto pit = it->processes.begin(); pit != it->processes.end(); pit++) {
+                    cout << "----> " << pit->pid << " " << pit->cmd;
+                    if (pit != it->processes.end() - 1)
+                        cout << " |\n";
                 }
-                close(newpfd[0]);
-                dup2(newpfd[1], STDOUT_FILENO);
-                close(newpfd[1]);
+                cout << endl;
+            }
+            continue;
+        }
+        if (cmd_begin->argv[0] == "bg") {
+            pid_t gpid = atoi(cmd_begin->argv[1].c_str());
+            kill(-gpid, SIGCONT);
+            continue;
+        }
+        if (cmd_begin->argv[0] == "fg") {
+            pid_t gpid = atoi(cmd_begin->argv[1].c_str());
+            toggleSIGCHLDBlock(SIG_BLOCK);
+            tcsetpgrp(STDIN_FILENO, gpid);
+            kill(-gpid, SIGCONT);
+            waitFg(gpid);
+            tcsetpgrp(STDIN_FILENO, getpid());
+            continue;
+        }
+        int fpgid = 0;  // fg process group id
+        int pipefd[2];
+        int prevfd[2];
+        toggleSIGCHLDBlock(SIG_BLOCK);
 
-                if (i == 0)
-                    setpgrp();
-                else
-                    setpgid(getpid(), fpgid);
-
+        for (int i = 0; i < num_cmds; i++) {
+            if (i < num_cmds - 1)
+                pipe(pipefd);
+            pid_t cpid = fork();
+            if (cpid < 0) {  // error in forking
+                perror("fork");
+                exit(1);
+            }
+            if (cpid == 0) {
+                toggleSIGCHLDBlock(SIG_UNBLOCK);
+                // reinstall signal-handlers
                 signal(SIGINT, SIG_DFL);
                 signal(SIGTSTP, SIG_DFL);
-
-                DEBUG_LOG("child: %d, group: %d\n", getpid(), getpgrp());
-
-                auto args = cmds[i]->c_str();
-                execvp(args[0], &args[0]);
+                // open redirection files for end pipe commands
+                if (i == 0 || i + 1 == num_cmds)
+                    cmds[i]->open_fds();
+                // set fg process group id = pid(child1)
+                if (i == 0)
+                    setpgrp();
+                else {
+                    setpgid(0, fpgid);
+                    // set input pipe file descriptor
+                    dup2(prevfd[0], cmds[i]->fd_in);
+                    // close unused pipe file descriptors
+                    close(prevfd[0]);
+                    close(prevfd[1]);
+                }
+                if (i < num_cmds) {  // set output pipe file descriptor
+                    dup2(pipefd[1], cmds[i]->fd_out);
+                    close(pipefd[1]);
+                    close(pipefd[0]);
+                }
+                vector<char*> args = cmds[i]->vc_str();
+                execvp(args[0], args.data());
                 perror("execvp");
-                exit(1);  // exec error
-
+                exit(1);
             } else {
                 if (i == 0) {
-                    fpgid = pid;
-                    setpgid(pid, fpgid);
-                    tcsetpgrp(STDIN_FILENO, pid);
-
-                    if (i) {
-                        close(pfd[0]);
-                        close(pfd[1]);
-                    }
-                    pfd[0] = newpfd[0];
-                    pfd[1] = newpfd[1];
-                } else
-                    setpgid(pid, fpgid);
+                    fpgid = cpid;
+                    setpgid(cpid, fpgid);
+                    tcsetpgrp(STDIN_FILENO, fpgid);
+                } else {
+                    setpgid(cpid, fpgid);
+                }
+                if (i > 0) {
+                    close(prevfd[0]);
+                    close(prevfd[1]);
+                }
+                prevfd[0] = pipefd[0];
+                prevfd[1] = pipefd[1];
+                if (i == 0) {
+                    jobs.push_back(Job(fpgid));
+                }
+                jobs.back().processes.push_back({cpid, cmds[i]->cmd});
+                proc2job[cpid] = jobs.size() - 1;
             }
         }
-        pid_t lastpid;
-        pid_t pid = fork();
-
-        int in = pfd[0];
-        if (pid == 0) {
-            cmd_end->open_fds();
-            
-            dup2(in, STDIN_FILENO);
-            close(in);
-            close(pfd[1]);
-
-            if (num_cmds > 1)
-                setpgid(getpid(), fpgid);
-            else
-                setpgrp();
-
-            signal(SIGINT, SIG_DFL);
-            signal(SIGTSTP, SIG_DFL);
-
-            DEBUG_LOG("child: %d, group: %d\n", getpid(), getpgrp());
-
-            auto args = cmd_end->c_str();
-            execvp(args[0], &args[0]);
-            perror("execvp");
-            exit(1);  // exec error
-        } else {
-            if (num_cmds == 1)
-                fpgid = pid;
-            setpgid(pid, fpgid);
-            if (num_cmds == 1)
-                tcsetpgrp(STDIN_FILENO, fpgid);
-        }
-        lastpid = pid;
-
-        waitpid(lastpid, NULL, WUNTRACED);
+        jobs.back()._cnt = num_cmds;
+        if (cmds.back()->bg == false) {
+            waitFg(fpgid);
+            // if (jobs.back().status == STOPPED) {
+            //     kill(-fpgid, SIGCONT);
+            // }
+        } else
+            toggleSIGCHLDBlock(SIG_UNBLOCK);
         tcsetpgrp(STDIN_FILENO, getpid());
-
-        // int pipe[2];
-        // for (Command* cmd : cmds) {
-        // }
-        // if (strcmp(argv[0], "fg") == 0) {  // Bring a process to foreground
-        //     if (bg_pids.size() == 0) {     // No background process
-        //         cout << "fg: No background jobs" << endl;
-        //         continue;
-        //     }
-        //     if (argc == 1) {
-        //         cpid = bg_pids[0];
-        //         kill(bg_pids.back(), SIGCONT);
-        //         waitpid(bg_pids.back(), NULL, 0);
-        //         cpid = gpid;
-        //         bg_pids.pop_back();
-        //         continue;
-        //     } else {  // indexing based on 1. ex) fg 1 -> bg.back()
-        //         int idx = atoi(argv[1]);
-        //         if (idx < 1 || idx > int(bg_pids.size())) {
-        //             cout << "fg: No such job" << endl;
-        //             continue;
-        //         }
-        //         cpid = bg_pids[0];
-        //         kill(bg_pids[int(bg_pids.size()) - idx], SIGCONT);
-        //         waitpid(bg_pids[int(bg_pids.size()) - idx], NULL, 0);
-        //         cpid = gpid;
-        //         bg_pids.erase(bg_pids.begin() + int(bg_pids.size()) - idx);
-        //         continue;
-        //     }
-        // } else if (strcmp(argv[0], "bg") == 0) {  // Put the process in background
-        //     if (bg_pids.size() == 0) {
-        //         cout << "bg: No current jobs" << endl;
-        //         continue;
-        //     }
-        //     if (argc == 1) {
-        //         if (bg_pids.size() == 0) {
-        //             cout << "bg: No background jobs" << endl;
-        //             continue;
-        //         }
-        //         kill(bg_pids.back(), SIGCONT);  // don't wait
-        //         bg_pids.pop_back();
-        //         continue;
-        //     } else {
-        //         int idx = atoi(argv[1]);
-        //         if (idx < 1 || idx > int(bg_pids.size())) {
-        //             cout << "bg: No such job" << endl;
-        //             continue;
-        //         }
-        //         kill(bg_pids[int(bg_pids.size()) - idx], SIGCONT);  // don't wait
-        //         cout << "[" << idx << "] "
-        //              << bg_pids[int(bg_pids.size()) - idx]
-        //              << " continued" << endl;
-        //         bg_pids.erase(bg_pids.begin() + int(bg_pids.size()) - idx);
-        //         continue;
-        //     }
-        // }
-        // bool bg = strcmp(argv[argc - 1], "&") == 0;
-        // if (bg) {
-        //     argv.pop_back();
-        //     argc--;
-        // }
-        // Command* curr = cmds[0];
-        // int pid = fork();
-        // if (pid < 0) {
-        //     cout << "fork error" << endl;
-        //     exit(EXIT_FAILURE);
-        // }
-        // if (pid == 0) {  // child-process
-        //     setpgrp();
-        //     auto args = curr->c_str();
-        //     dup2(curr->fd_in, STDIN_FILENO);
-        //     dup2(curr->fd_out, STDOUT_FILENO);
-        //     execvp(args[0], &args[0]);
-        //     perror("execvp");
-        //     exit(1);  // exec error
-        // } else {
-        //     setpgid(pid, pid);
-        //     tcsetpgrp(0, pid);
-        //     int status;
-        //     if (curr->bg) {
-        //         bg_pids.push_back(pid);
-        //         cout << "[" << bg_pids.size() << "] " << pid << " started" << endl;
-        //     } else {
-        //         waitpid(pid, NULL, 0);
-        //     }
-
-        //     int status;
-        //     if (!curr->bg) {
-        //         cpid = pid;
-        //         pid_t t;
-        //         while ((t = waitpid(pid, &status, WUNTRACED)) == -1) {
-        //             if (errno != EINTR)
-        //         }
-
-        //         cout << status << endl;
-        //         // if (errno == EINTR){
-        //         //     cout << "Interrupted" << endl;
-        //         // }
-        //         if (WIFSTOPPED(status) || (errno == EINTR && !WIFEXITED(status)) {
-        //             bg_pids.push_back(pid);
-        //             cout << "[" << bg_pids.size() << "] " << pid << " stopped" << endl;
-        //             kill(pid, SIGCONT);
-        //         }
-        //         cpid = gpid;
-        //     }
     }
 }
