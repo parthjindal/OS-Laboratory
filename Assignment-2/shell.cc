@@ -4,6 +4,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <dirent.h>
 #include <algorithm>
 #include <climits>
 #include <csignal>
@@ -275,6 +276,63 @@ void clean_history(){
     }
     fclose(fp);
 }
+
+vector<char*> autocomplete(char* input){
+    vector<char*> ret = {};
+    vector<char*> tokens;
+    char* token = strtok(input, "/");
+    while(token != NULL){
+        tokens.push_back(token);
+        token = strtok(NULL, "/");
+    }
+
+    char* dir_path = (char *)malloc(sizeof(char) * 200);
+    char* file_name = (char *)malloc(sizeof(char) * 200);
+    strcpy(dir_path, "./");
+    strcpy(file_name, tokens[tokens.size() - 1]);
+    int name_len = strlen(file_name);
+
+    if(tokens.size() == 0){
+        return ret;
+    } else if(tokens.size() > 1) {
+        for(int i = 0; i < tokens.size() - 1; i++){
+            strcat(dir_path, tokens[i]);
+            strcat(dir_path, "/");
+        }
+    }
+
+    DIR* dir = opendir(dir_path);
+    if(dir == NULL){
+        return ret;
+    }
+    struct dirent* entry;
+    while((entry = readdir(dir)) != NULL){
+        if(strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0){
+            continue;
+        }
+        char* name = (char *)malloc(sizeof(char) * 200);
+        strcpy(name, entry->d_name);
+        if (entry->d_type == DT_DIR){
+            name[strlen(name)] = '/';
+            name[strlen(name)] = '\0';
+        }
+        int flag = 1;
+        for(int i = 0; i < name_len; i++){
+            if(name[i] != file_name[i]){
+                flag = 0;
+            }
+        }        
+        if(flag == 1)
+            ret.push_back(name);
+    }
+    cout << dir_path << endl;
+    closedir(dir);
+    for(int i = 0; i < ret.size(); i++){
+        cout << ret[i] << endl;
+    }
+    return ret;
+}
+
 
 int main() {
     std::string inp;
