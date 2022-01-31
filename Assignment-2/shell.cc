@@ -359,4 +359,6 @@ int main() {
  *              2. add autocomplete
  *              3. multiwatch
  *              4. history search
+ *              5. cleanup on exit
+ *              6. using termios for ctrl r, tab completion
  */
