@@ -202,13 +202,17 @@ static void waitFg(pid_t pid) {
     toggleSIGCHLDBlock(SIG_UNBLOCK);
 }
 
+static void handleSIGINT(int sig) {
+    std::cin.setstate(std::ios::badbit);
+}
+
 int main() {
     std::string inp;
 
     signal(SIGCHLD, reap);
 
     struct sigaction sig_act;
-    sig_act.sa_handler = SIG_IGN;
+    sig_act.sa_handler = handleSIGINT;
     sigemptyset(&sig_act.sa_mask);
     sig_act.sa_flags = 0;
 
@@ -267,8 +271,8 @@ int main() {
                 cout << "No such job" << endl;
                 continue;
             }
-            toggleSIGCHLDBlock(SIG_BLOCK);
             tcsetpgrp(STDIN_FILENO, gpid);
+            toggleSIGCHLDBlock(SIG_BLOCK);
             kill(-gpid, SIGCONT);
             waitFg(gpid);
             tcsetpgrp(STDIN_FILENO, getpid());
