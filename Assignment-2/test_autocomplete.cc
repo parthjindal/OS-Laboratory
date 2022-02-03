@@ -50,7 +50,7 @@ vector<char*> autocomplete(char* input){
 
     char* dir_path = (char *)malloc(sizeof(char) * 200);
     char* file_name = (char *)malloc(sizeof(char) * 200);
-    strcpy(dir_path, "./");
+    dir_path[0] = '\0';
     strcpy(file_name, tokens[tokens.size() - 1]);
     int name_len = strlen(file_name);
 
@@ -62,7 +62,10 @@ vector<char*> autocomplete(char* input){
             strcat(dir_path, "/");
         }
     }
-
+    cout << dir_path << endl;
+    if(strlen(dir_path) == 0){
+        strcpy(dir_path, ".");
+    }
     DIR* dir = opendir(dir_path);
     if(dir == NULL){
         return ret;
@@ -87,26 +90,25 @@ vector<char*> autocomplete(char* input){
         if(flag == 1)
             ret.push_back(name);
     }
-    // cout << dir_path << endl;
     closedir(dir);
     char *prefix = longestCommonPrefix(ret);
-    // cout << prefix << endl;
     if(strlen(prefix) != strlen(file_name) && ret.size() > 1){
-        vector <char*> ret_prefix;
-        ret_prefix.push_back(prefix);
-        return ret_prefix;
+        ret.clear();
+        ret.push_back(prefix);
     }
-    // for(int i = 0; i < ret.size(); i++){
-        // cout << ret[i] << endl;
-    // }
+    for(int i = 0; i < ret.size(); i++){
+        if(strcmp(dir_path, ".") != 0){
+            ret[i] = strcat(dir_path, ret[i]);
+        }
+    }
     return ret;
 }
 
 int main() {
     char str1 []= "Tes";
-    char str2 []= "Test/Test2/abe";
+    char str2 []= "./Test/Test2/abe";
     char str3 []= "Test/Test2/a";
-    char str4 []= "Test/Tes";
+    char str4 []= "./Test/Tes";
 
     vector <char*> ret;
     ret = autocomplete(str1);

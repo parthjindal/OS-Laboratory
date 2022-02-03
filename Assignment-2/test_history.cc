@@ -126,5 +126,4 @@ int main() {
         }
         update_history(cmd);
     }
-    
 }
