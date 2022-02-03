@@ -16,27 +16,12 @@
 #define HISTORY_SIZE 10000
 #define HISTORY_PRINT 1000
 
-static FILE* _logFp = NULL;
-static void initLogger(const char* logFile) {
-    _logFp = logFile ? fopen(logFile, "w") : stdout;
-}
-
-static void log_print(FILE* fp, const char* fmt, ...) {
-    if (_logFp != NULL)
-        fp = _logFp;
-    va_list args;
-    va_start(args, fmt);
-    vfprintf(fp, fmt, args);
-    fflush(fp);
-    va_end(args);
-}
-
 // https://github.com/kuroidoruido/ColorLog/blob/master/colorlog.h
 #define _COLOR_RED "1;31"
 #define _COLOR_BLUE "1;34"
 #define _COLOR_GREEN "0;32"
 
-#define __LOG_COLOR(FD, CLR, CTX, TXT, args...) log_print(FD, "\033[%sm[%s] \033[0m" TXT, CLR, CTX, ##args)
+#define __LOG_COLOR(FD, CLR, CTX, TXT, args...) fprintf(FD, "\033[%sm[%s] \033[0m" TXT, CLR, CTX, ##args)
 #define INFO_LOG(TXT, args...) __LOG_COLOR(stdout, _COLOR_GREEN, "info", TXT, ##args)
 #define DEBUG_LOG(TXT, args...) __LOG_COLOR(stderr, _COLOR_BLUE, "debug", TXT, ##args)
 #define ERROR_LOG(TXT, args...) __LOG_COLOR(stderr, _COLOR_RED, "error", TXT, ##args)

@@ -28,7 +28,7 @@ int numJobs = 0;
 extern map<pid_t, int> pid2wd;
 extern pid_t inofd;  // inotify file descriptor
 
-static void reap(int sig) {
+static void handleSIGCHLD(int sig) {
     while (1) {
         int status;
         pid_t pid = waitpid(-1, &status, WNOHANG | WUNTRACED | WCONTINUED);
@@ -162,7 +162,7 @@ void run_command(int idx) {
 }
 
 int main() {
-    signal(SIGCHLD, reap);  // info: SA_RESTART is ok here
+    signal(SIGCHLD, handleSIGCHLD);  // info: SA_RESTART is ok here
     struct sigaction sig_act;
     sig_act.sa_handler = handleSIGINT;  // sets cin to badbit
     sigemptyset(&sig_act.sa_mask);
@@ -230,19 +230,19 @@ int main() {
                 }
                 kill(-gpid, SIGCONT);
                 continue;
-            } else if (builtin_cmd == "multiwatch") {
-                struct sigaction sig_old;
 
-                struct sigaction sig_new;
+            } else if (builtin_cmd == "multiwatch") {
+                struct sigaction sig_old, sig_new;
                 sig_new.sa_handler = handler_multiwatch;
                 sigemptyset(&sig_new.sa_mask);
                 sig_new.sa_flags = SA_RESTART;
 
                 sigaction(SIGINT, &sig_new, &sig_old);
                 signal(SIGTSTP, SIG_IGN);
-                builtin_multiwatch(joblist, "");
-                sigaction(SIGINT, &sig_old, NULL);
 
+                builtin_multiwatch(joblist, "");
+
+                sigaction(SIGINT, &sig_old, NULL);
                 sigaction(SIGTSTP, &sig_act, NULL);
             }
         } else {
@@ -255,7 +255,6 @@ int main() {
 /**
  * @brief TODO: 1. add cd builtin.
  *              2. add autocomplete
- *              3. multiwatch
  *              4. history search
  *              5. cleanup on exit
  *              6. using termios for ctrl r, tab completion
