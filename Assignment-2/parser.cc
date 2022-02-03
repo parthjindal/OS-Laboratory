@@ -129,23 +129,3 @@ void Parser::parse(const string& inp, vector<Job*>& joblist, int& numJobs) {
         numJobs++;
     }
 }
-
-// int main() {
-//     string cmd;
-//     vector<Job*> joblist;
-//     int numJobs = 0;
-//     getline(cin, cmd);
-//     Parser p(cmd);
-//     p.parse(cmd, joblist, numJobs);
-//     if (p.is_builtin) {
-//         cout << "builtin: " << p.builtin_cmd << endl;
-//         for (auto it = p.builtin_argv.begin(); it != p.builtin_argv.end(); it++) {
-//             cout << *it << endl;
-//         }
-//     }
-//     cout << "numJobs: " << numJobs << endl;
-//     for (int i = 0; i < numJobs; i++) {
-//         cout << *joblist[i] << endl;
-//     }
-//     return 0;
-// }

@@ -142,7 +142,6 @@ void builtin_multiwatch(std::vector<Job*>& joblist, string outfile) {
 
     int count = (int)readfds.size();
     while (count) {
-        cout << "count: " << count << endl;
         int n = read(inofd, events, sizeof(events));
         if (n < 0) {
             if (errno == EBADF)  // inofd is closed (sigint handler)
@@ -175,12 +174,9 @@ void builtin_multiwatch(std::vector<Job*>& joblist, string outfile) {
                 int wd = event->wd;
                 int readfd = readfds[wd2job[wd]];
                 count--;
-                cout << "job " << joblist[wd2job[wd]]->_cmd << " is done" << endl;
             }
             i += len + event->len;
-            cout << "i: " << i << endl;
         }
-        cout << "count: " << count << endl;
     }
     if (outfp != stdout)
         fclose(outfp);
@@ -188,5 +184,4 @@ void builtin_multiwatch(std::vector<Job*>& joblist, string outfile) {
         close(fd);
     close(inofd);    // close inofd if not closed already
     pid2wd.clear();  // clear pid2wd
-    cout << "returning from multiwatch" << endl;
 }
