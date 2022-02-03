@@ -1,11 +1,13 @@
 CC = g++
-FLAGS = -Wall -Wextra -std=c++11 -O2
+FLAGS = -std=c++11 -O2
 
-all: shell.h shell.cc parser.o process.o multiwatch.o sighandlers.o
-	$(CC) $(FLAGS) -o shell shell.cc parser.o process.o multiwatch.o sighandlers.o
-
+all: shell.o parser.o process.o multiwatch.o sighandlers.o
+	$(CC) $(FLAGS) -o shell shell.o parser.o process.o multiwatch.o sighandlers.o
 clean:
-	rm -f parser.o process.o multiwatch.o sighandlers.o
+	rm -f parser.o process.o multiwatch.o sighandlers.o shell.o
+
+shell.o: shell.h shell.cc
+	$(CC) $(FLAGS) -c shell.cc
 
 parser.o: parser.cc parser.h
 	$(CC) $(FLAGS) -c parser.cc -o parser.o

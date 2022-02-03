@@ -49,7 +49,6 @@ static void handleSIGCHLD(int sig) {
                 if (job.num_active == 0) {
                     job.status = JobStatus::DONE;
                     if (pid2wd.find(job.pgid) != pid2wd.end()) {
-                        // cout << job.pgid << " removed from inotify" << endl;
                         inotify_rm_watch(inofd, pid2wd[job.pgid]);
                     }
                 }
@@ -231,6 +230,15 @@ int main() {
                 kill(-gpid, SIGCONT);
                 continue;
 
+            } else if (builtin_cmd == "cd") {
+                string dir = parser.builtin_argv[0];
+                if (dir.empty()) {
+                    dir = getenv("HOME");
+                }
+                if (chdir(dir.c_str()) == -1) {
+                    perror("cd");
+                    continue;
+                }
             } else if (builtin_cmd == "multiwatch") {
                 struct sigaction sig_old, sig_new;
                 sig_new.sa_handler = handler_multiwatch;
@@ -240,7 +248,7 @@ int main() {
                 sigaction(SIGINT, &sig_new, &sig_old);
                 signal(SIGTSTP, SIG_IGN);
 
-                builtin_multiwatch(joblist, "");
+                builtin_multiwatch(joblist, parser.builtin_argv[0]);
 
                 sigaction(SIGINT, &sig_old, NULL);
                 sigaction(SIGTSTP, &sig_act, NULL);

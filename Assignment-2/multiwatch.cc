@@ -11,7 +11,7 @@
 #include "sighandlers.h"
 using namespace std;
 
-#define MAX_EVENTS 1024
+#define MAX_EVENTS 32
 
 extern vector<Job*> jobTable;
 extern map<pid_t, int> proc2job;
@@ -134,60 +134,59 @@ void builtin_multiwatch(std::vector<Job*>& joblist, string outfile) {
         readfds.push_back(fd);
         pid2wd[pid] = wd;
     }
-
-    FILE* outfp = outfile == "" ? stdout : fopen(outfile.c_str(), "w");
+    FILE* outfp = (outfile == "") ? stdout : fopen(outfile.c_str(), "w");
     size_t len = sizeof(struct inotify_event);
+
     struct inotify_event events[MAX_EVENTS * len];
-
     char buff[1024];
-    int count = (int)readfds.size();
 
+    int count = (int)readfds.size();
     while (count) {
+        cout << "count: " << count << endl;
         int n = read(inofd, events, sizeof(events));
         if (n < 0) {
-            if (errno == EBADF) {
+            if (errno == EBADF)  // inofd is closed (sigint handler)
                 break;
-            }
             perror("read");
             return;
         }
+        sleep(10);
         int i = 0;
         while (i < n) {
             struct inotify_event* event = (struct inotify_event*)&events[i];
             if (event->mask & IN_MODIFY) {
                 int wd = event->wd;
                 int rfd = readfds[wd2job[wd]];
-                int l = read(rfd, buff, sizeof(buff));
-                if (l > 0) {
-                    fprintf(outfp, "%s, %ld\n", joblist[wd2job[wd]]->_cmd.c_str(), time(0));
-                    fprintf(outfp, "----------------------------------------------------\n");
-                    fwrite(buff, 1, l, outfp);
-                    while ((l = read(rfd, buff, sizeof(buff))) > 0 || errno == EINTR) {
-                        fwrite(buff, 1, l, outfp);
+                int l = 0;
+                bool f = false;
+                while ((l = read(rfd, buff, sizeof(buff))) > 0 || errno == EINTR) {
+                    if (!f) {
+                        fprintf(outfp, "%s, %ld\n", joblist[wd2job[wd]]->_cmd.c_str(), time(0));
+                        fprintf(outfp, "----------------------------------------------------\n");
+                        f = true;
                     }
-                    fprintf(outfp, "----------------------------------------------------\n\n");
+                    if (l > 0)
+                        fwrite(buff, 1, l, outfp);
                 }
+                if (f)
+                    fprintf(outfp, "----------------------------------------------------\n\n");
             }
             if (event->mask & IN_IGNORED) {
                 int wd = event->wd;
-                int rfd = readfds[wd2job[wd]];
-                int l = read(rfd, buff, sizeof(buff));
-                if (l > 0) {
-                    fprintf(outfp, "%s, %ld\n", joblist[wd2job[wd]]->_cmd.c_str(), time(0));
-                    fprintf(outfp, "----------------------------------------------------\n");
-                    fwrite(buff, 1, l, outfp);
-                    while ((l = read(rfd, buff, sizeof(buff))) > 0 || errno == EINTR) {
-                        fwrite(buff, 1, l, outfp);
-                    }
-                    fprintf(outfp, "----------------------------------------------------\n\n");
-                }
+                int readfd = readfds[wd2job[wd]];
                 count--;
+                cout << "job " << joblist[wd2job[wd]]->_cmd << " is done" << endl;
             }
             i += len + event->len;
+            cout << "i: " << i << endl;
         }
+        cout << "count: " << count << endl;
     }
+    if (outfp != stdout)
+        fclose(outfp);
     for (int fd : readfds)  // close all fds
         close(fd);
     close(inofd);    // close inofd if not closed already
     pid2wd.clear();  // clear pid2wd
+    cout << "returning from multiwatch" << endl;
 }

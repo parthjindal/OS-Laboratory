@@ -61,12 +61,11 @@ void Parser::parse_job(const string& s, Job& job) {
 }
 
 void Parser::parse(const string& inp, vector<Job*>& joblist, int& numJobs) {
-    stringstream ss(inp);
+    string tmp = inp;
+    trim(tmp, ' ');
+    stringstream ss(tmp);
     string token;
     getline(ss, token, ' ');
-    while (token == " ") {
-        getline(ss, token, ' ');
-    }
     if (token == " ")
         return;
     trim(token);
@@ -94,14 +93,18 @@ void Parser::parse(const string& inp, vector<Job*>& joblist, int& numJobs) {
         trim(token);
         builtin_argv.push_back(token);
         numJobs = 0;
-
+    } else if (token == "cd") {
+        is_builtin = true;
+        builtin_cmd = "cd";
+        getline(ss, token, ' ');
+        trim(token);
+        builtin_argv.push_back(token);
+        numJobs = 0;
     } else if (token == "multiwatch") {
         is_builtin = true;
         builtin_cmd = "multiwatch";
-
         getline(ss, token, '[');
         getline(ss, token, ']');
-        // cout << token << endl;
         vector<string> _cmds = tokenize(token, ',');
         for (auto it = _cmds.begin(); it != _cmds.end(); it++) {
             string cpy = *it;
@@ -116,9 +119,8 @@ void Parser::parse(const string& inp, vector<Job*>& joblist, int& numJobs) {
         getline(ss, token, '>');
         getline(ss, token, '>');
         trim(token);
-        if (token.size() != 0) {
-            builtin_argv.push_back(token);  // outfile
-        }
+        builtin_argv.push_back(token);  // outfile
+
     } else {
         Job* job = new Job();
         job->_cmd = inp;
