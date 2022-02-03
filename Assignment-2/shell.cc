@@ -1,7 +1,10 @@
 #include "shell.h"
+
 #include <fcntl.h>
+#include <sys/inotify.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
 #include <climits>
 #include <csignal>
 #include <cstdio>
@@ -9,16 +12,22 @@
 #include <map>
 #include <vector>
 
-#include "process.h"
+#include "multiwatch.h"
 #include "parser.h"
+#include "process.h"
+#include "sighandlers.h"
+
+extern pid_t FG_PID;
 
 using namespace std;
 
 map<pid_t, int> proc2job;  // pid -> Job index in Job Table
 vector<Job*> jobTable;
-
 int numJobs = 0;
-static pid_t fgpid = 0;  // current foreground process id
+
+extern map<pid_t, int> pid2wd;
+extern pid_t inofd;  // inotify file descriptor
+
 static void reap(int sig) {
     while (1) {
         int status;
@@ -26,22 +35,34 @@ static void reap(int sig) {
         if (pid <= 0) break;
         int jidx = proc2job[pid];
         Job& job = *jobTable[jidx];
-
         if (WIFSTOPPED(status)) {
-            cout << "[" << job.pgid << "] stopped" << endl;
-            job.status = STOPPED;
-        } else if (WIFSIGNALED(status) || WIFEXITED(status)) {
-            job.status = DONE;
-        } else if (WIFCONTINUED(status)) {
-            cout << "[" << job.pgid << "] continued" << endl;
-            job.status = RUNNING;
-            job.num_active = (int)job.processes.size();
-        }
-        if (job.pgid == fgpid && !WIFCONTINUED(status)) {
             job.num_active--;
             if (job.num_active == 0) {
-                fgpid = 0;
+                cout << "[" << job.pgid << "] stopped" << endl;
+                job.status = JobStatus::STOPPED;
             }
+        } else if (WIFSIGNALED(status) || WIFEXITED(status)) {
+            if (job.status == STOPPED) {
+                job.status = JobStatus::DONE;
+            } else {
+                job.num_active--;
+                if (job.num_active == 0) {
+                    job.status = JobStatus::DONE;
+                    if (pid2wd.find(job.pgid) != pid2wd.end()) {
+                        // cout << job.pgid << " removed from inotify" << endl;
+                        inotify_rm_watch(inofd, pid2wd[job.pgid]);
+                    }
+                }
+            }
+        } else if (WIFCONTINUED(status)) {
+            job.num_active++;
+            if (job.num_active == (int)job.processes.size()) {
+                cout << "[" << job.pgid << "] continued" << endl;
+                job.status = JobStatus::RUNNING;
+            }
+        }
+        if (job.pgid == FG_PID && !WIFCONTINUED(status) && job.num_active == 0) {
+            FG_PID = 0;
         }
     }
 }
@@ -52,6 +73,7 @@ void prompt(string& inp) {
     std::string wcd(buff);
     std::string wd = wcd.substr(wcd.find_last_of("/") + 1);
     cout << GREEN << wd << RESET << "$ ";
+    // inp = getinput();
     getline(cin, inp);  // todo: write wrapper using non-canonical mode
 
     if (cin.bad()) {
@@ -61,40 +83,17 @@ void prompt(string& inp) {
     }
 }
 
-static void toggleSIGCHLDBlock(int how) {
-    sigset_t mask;
-    sigemptyset(&mask);
-    sigaddset(&mask, SIGCHLD);
-    sigprocmask(how, &mask, NULL);
-}
-
-static void waitFg(pid_t pid) {
-    fgpid = pid;
-    sigset_t empty;
-    sigemptyset(&empty);
-    while (fgpid == pid) {
-        sigsuspend(&empty);
-    }
-    toggleSIGCHLDBlock(SIG_UNBLOCK);
-}
-
 static void handleSIGINT(int sig) {
     std::cin.setstate(std::ios::badbit);
 }
 
-vector<pid_t> fg_jobs;
-void multiwatch_handler(int sig) {
-    for (int i = 0; i < fg_jobs.size(); i++) {
-        kill(-fg_jobs[i], SIGINT);
-    }
-}
-
-pid_t run_command(Job& job) {
+void run_command(int idx) {
     int fpgid = 0;  // fg process group id
     int pipefd[2];
     int prevfd[2];
     toggleSIGCHLDBlock(SIG_BLOCK);
 
+    Job& job = *jobTable[idx];
     int num_cmds = job.processes.size();
     auto& processes = job.processes;
 
@@ -112,8 +111,8 @@ pid_t run_command(Job& job) {
             signal(SIGINT, SIG_DFL);
             signal(SIGTSTP, SIG_DFL);
             // open redirection files for end pipe commands
-            if (i == 0 || i + 1 == num_cmds)
-                processes[i].open_fds();
+            // if (i == 0 || i + 1 == num_cmds)
+            processes[i].open_fds();
             // set fg process group id = pid(child1)
             if (i == 0)
                 setpgrp();
@@ -125,7 +124,7 @@ pid_t run_command(Job& job) {
                 close(prevfd[0]);
                 close(prevfd[1]);
             }
-            if (i < num_cmds && num_cmds > 1) {
+            if (i < num_cmds - 1) {
                 dup2(pipefd[1], processes[i].fd_out);
                 close(pipefd[1]);
                 close(pipefd[0]);
@@ -152,20 +151,18 @@ pid_t run_command(Job& job) {
             prevfd[1] = pipefd[1];
             processes[i].pid = cpid;
             job.num_active++;
-            proc2job[cpid] = jobTable.size() - 1;
+            proc2job[cpid] = idx;
         }
     }
-
     if (job.processes.back().bg == false) {  // todo: associate bg with a job and not a process
-        waitFg(fpgid);
+        waitForeground(fpgid);
     } else
         toggleSIGCHLDBlock(SIG_UNBLOCK);
     tcsetpgrp(STDIN_FILENO, getpid());
-    return fpgid;
 }
 
 int main() {
-    signal(SIGCHLD, reap);
+    signal(SIGCHLD, reap);  // info: SA_RESTART is ok here
     struct sigaction sig_act;
     sig_act.sa_handler = handleSIGINT;  // sets cin to badbit
     sigemptyset(&sig_act.sa_mask);
@@ -185,8 +182,6 @@ int main() {
         int numJobs = 0;
 
         parser.parse(inp, joblist, numJobs);
-        jobTable.insert(jobTable.end(), joblist.begin(), joblist.end());
-        
 
         if (parser.is_builtin == true) {
             string builtin_cmd = parser.builtin_cmd;
@@ -214,9 +209,10 @@ int main() {
                 tcsetpgrp(STDIN_FILENO, gpid);
                 toggleSIGCHLDBlock(SIG_BLOCK);
                 kill(-gpid, SIGCONT);
-                waitFg(gpid);
+                waitForeground(gpid);
                 tcsetpgrp(STDIN_FILENO, getpid());
                 continue;
+
             } else if (builtin_cmd == "bg") {
                 pid_t gpid = atoi(parser.builtin_argv[0].c_str());
                 bool flag = 0;
@@ -235,10 +231,23 @@ int main() {
                 kill(-gpid, SIGCONT);
                 continue;
             } else if (builtin_cmd == "multiwatch") {
-                //
+                struct sigaction sig_old;
+
+                struct sigaction sig_new;
+                sig_new.sa_handler = handler_multiwatch;
+                sigemptyset(&sig_new.sa_mask);
+                sig_new.sa_flags = SA_RESTART;
+
+                sigaction(SIGINT, &sig_new, &sig_old);
+                signal(SIGTSTP, SIG_IGN);
+                builtin_multiwatch(joblist, "");
+                sigaction(SIGINT, &sig_old, NULL);
+
+                sigaction(SIGTSTP, &sig_act, NULL);
             }
         } else {
-            run_command(*joblist[0]);  // non-builtin command
+            jobTable.push_back(joblist[0]);
+            run_command(jobTable.size() - 1);  // non-builtin command
         }
     }
 }

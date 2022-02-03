@@ -16,12 +16,12 @@
 #define HISTORY_SIZE 10000
 #define HISTORY_PRINT 1000
 
-FILE* _logFp = NULL;
-void initLogger(const char* logFile) {
+static FILE* _logFp = NULL;
+static void initLogger(const char* logFile) {
     _logFp = logFile ? fopen(logFile, "w") : stdout;
 }
 
-void log_print(FILE* fp, const char* fmt, ...) {
+static void log_print(FILE* fp, const char* fmt, ...) {
     if (_logFp != NULL)
         fp = _logFp;
     va_list args;
@@ -35,10 +35,6 @@ void log_print(FILE* fp, const char* fmt, ...) {
 #define _COLOR_RED "1;31"
 #define _COLOR_BLUE "1;34"
 #define _COLOR_GREEN "0;32"
-
-extern FILE* _logFp;
-void initLogger(const char*);
-void log_print(FILE*, const char*, ...);
 
 #define __LOG_COLOR(FD, CLR, CTX, TXT, args...) log_print(FD, "\033[%sm[%s] \033[0m" TXT, CLR, CTX, ##args)
 #define INFO_LOG(TXT, args...) __LOG_COLOR(stdout, _COLOR_GREEN, "info", TXT, ##args)

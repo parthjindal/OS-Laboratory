@@ -34,6 +34,7 @@ class Process {
 };
 
 struct Job {
+    std::string _cmd;
     pid_t pgid;
     std::vector<Process> processes;
     JobStatus status;
@@ -41,6 +42,7 @@ struct Job {
     Job(pid_t _pgid = -1) : pgid(_pgid) {
         status = READY;
         num_active = 0;
+        _cmd = "";
     }
 };
 

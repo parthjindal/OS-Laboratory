@@ -96,7 +96,7 @@ void Parser::parse(const string& inp, vector<Job*>& joblist, int& numJobs) {
         numJobs = 0;
 
     } else if (token == "multiwatch") {
-                is_builtin = true;
+        is_builtin = true;
         builtin_cmd = "multiwatch";
 
         getline(ss, token, '[');
@@ -108,6 +108,7 @@ void Parser::parse(const string& inp, vector<Job*>& joblist, int& numJobs) {
             trim(cpy, ' ');
             trim(cpy, '"');
             Job* job = new Job();
+            job->_cmd = cpy;
             parse_job(cpy, *job);
             joblist.push_back(job);
             numJobs++;
@@ -120,6 +121,7 @@ void Parser::parse(const string& inp, vector<Job*>& joblist, int& numJobs) {
         }
     } else {
         Job* job = new Job();
+        job->_cmd = inp;
         parse_job(inp, *job);
         joblist.push_back(job);
         numJobs++;
