@@ -1,346 +1,169 @@
 #include "shell.h"
 
 #include <fcntl.h>
+#include <sys/inotify.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include <dirent.h>
-#include <algorithm>
 #include <climits>
 #include <csignal>
 #include <cstdio>
 #include <iostream>
-#include <list>
 #include <map>
-#include <set>
-#include <stdexcept>
 #include <vector>
+
+#include "multiwatch.h"
+#include "parser.h"
+#include "process.h"
+#include "sighandlers.h"
+
+extern pid_t FG_PID;
 
 using namespace std;
 
-#define RUNNING 0
-#define STOPPED 1
-#define DONE 2
+map<pid_t, int> proc2job;  // pid -> Job index in Job Table
+vector<Job*> jobTable;
+int numJobs = 0;
 
-string getStatus(int status) {
-    if (status == RUNNING)
-        return "running";
-    else if (status == STOPPED)
-        return "stopped";
-    else
-        return "done";
-}
+extern map<pid_t, int> pid2wd;
+extern pid_t inofd;  // inotify file descriptor
 
-vector<string> tokenize(const string& _cmd, char delim) {
-    vector<string> argv;
-    stringstream ss(_cmd);
-    string token;
-    while (getline(ss, token, delim)) {
-        argv.push_back(token);
-    }
-    return argv;
-}
-
-class Command {
-   public:
-    string cmd;           // command string
-    vector<string> argv;  // arguments
-    int argc;
-    bool bg;
-    int fd_in, fd_out;
-    string fd_in_name, fd_out_name;
-
-    Command(const string& _cmd) : cmd(_cmd), bg(false), fd_in(0), fd_out(1) {
-        fd_in_name = fd_out_name = "";
-    }
-    ~Command() {
-        // clean up file descriptors
-        if (fd_in != 0) close(fd_in);
-        if (fd_out != 1) close(fd_out);
-    }
-    void parse() {
-        vector<string> _argv = tokenize(cmd, ' ');
-        for (int i = 0; i < int(_argv.size()); i++) {
-            if (_argv[i] == "&") {
-                bg = true;
-            } else if (_argv[i] == "<") {
-                fd_in_name = _argv[i + 1];
-                i++;
-            } else if (_argv[i] == ">") {
-                fd_out_name = _argv[i + 1];
-                i++;
-            } else if (_argv[i].size() != 0) {
-                argv.push_back(_argv[i]);
-            }
-        }
-        argc = argv.size();
-        cmd = "";
-        for (int i = 0; i < argc; i++) {
-            cmd += argv[i];
-            if (i != argc - 1)
-                cmd += " ";
-        }
-    }
-
-    friend ostream& operator<<(ostream& os, const Command& _cmd) {
-        os << _cmd.cmd << " < " << _cmd.fd_in << " > " << _cmd.fd_out << (_cmd.bg ? " &" : "");
-        return os;
-    }
-
-    vector<char*> vc_str() {
-        vector<char*> _args;
-        for (int i = 0; i < argc; i++) {
-            char* tmp = new char[argv[i].length() + 1];
-            strcpy(tmp, argv[i].c_str());
-            _args.push_back(tmp);
-        }
-        _args.push_back(nullptr);
-        return _args;
-    }
-
-    void open_fds() {
-        if (fd_in_name != "") {
-            fd_in = open(fd_in_name.c_str(), O_RDONLY);
-            dup2(fd_in, STDIN_FILENO);
-        }
-        if (fd_out_name != "") {
-            fd_out = open(fd_out_name.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0700);
-            dup2(fd_out, STDOUT_FILENO);
-        }
-    }
-};
-vector<Command*> cmds;
-
-struct Process {
-    int pid;
-    string cmd;
-};
-
-struct Job {
-    pid_t pgid;
-    vector<Process> processes;
-    int _cnt;
-    int status;
-    Job(pid_t _pgid) : pgid(_pgid) {
-        _cnt = 0;
-        status = RUNNING;
-    }
-};
-
-map<int, int> proc2job;
-vector<Job> jobs;
-
-int num_cmds = 0;
-void prompt(string& inp) {
-    for (int i = 0; i < num_cmds; i++) {
-        delete cmds[i];
-    }
-    cmds.clear();
-    num_cmds = 0;
-
-    char buff[PATH_MAX];
-    getcwd(buff, PATH_MAX);
-    std::string wcd(buff);
-    std::string wd = wcd.substr(wcd.find_last_of("/") + 1);
-    cout << GREEN << wd << RESET << "$ ";
-    getline(cin, inp);
-
-    if (cin.bad()) {
-        cin.clear();
-        num_cmds = 0;
-        cout << endl;
-        return;
-    }
-    vector<string> _cmds = tokenize(inp, '|');
-    for (auto it = _cmds.begin(); it != _cmds.end(); it++) {
-        Command* cmd = new Command(*it);
-        cmd->parse();
-        cmds.push_back(cmd);
-    }
-    num_cmds = cmds.size();
-}
-
-static pid_t fgpid = 0;
-static void reap(int sig) {
+static void handleSIGCHLD(int sig) {
     while (1) {
         int status;
         pid_t pid = waitpid(-1, &status, WNOHANG | WUNTRACED | WCONTINUED);
         if (pid <= 0) break;
         int jidx = proc2job[pid];
+        Job& job = *jobTable[jidx];
         if (WIFSTOPPED(status)) {
-            cout << "[" << jobs[jidx].pgid << "] stopped" << endl;
-            jobs[jidx].status = STOPPED;
+            job.num_active--;
+            if (job.num_active == 0) {
+                cout << "[" << job.pgid << "] stopped" << endl;
+                job.status = JobStatus::STOPPED;
+            }
         } else if (WIFSIGNALED(status) || WIFEXITED(status)) {
-            jobs[jidx].status = DONE;
+            if (job.status == STOPPED) {
+                job.status = JobStatus::DONE;
+            } else {
+                job.num_active--;
+                if (job.num_active == 0) {
+                    job.status = JobStatus::DONE;
+                    if (pid2wd.find(job.pgid) != pid2wd.end()) {
+                        inotify_rm_watch(inofd, pid2wd[job.pgid]);
+                    }
+                }
+            }
         } else if (WIFCONTINUED(status)) {
-            cout << "[" << jobs[jidx].pgid << "] continued" << endl;
-            jobs[jidx].status = RUNNING;
-            jobs[jidx]._cnt = (int)jobs[jidx].processes.size();
-        }
-        if (jobs[jidx].pgid == fgpid && !WIFCONTINUED(status)) {
-            jobs[jidx]._cnt--;
-            if (jobs[jidx]._cnt == 0) {
-                fgpid = 0;
+            job.num_active++;
+            if (job.num_active == (int)job.processes.size()) {
+                cout << "[" << job.pgid << "] continued" << endl;
+                job.status = JobStatus::RUNNING;
             }
         }
+        if (job.pgid == FG_PID && !WIFCONTINUED(status) && job.num_active == 0) {
+            FG_PID = 0;
+        }
     }
 }
 
-static void toggleSIGCHLDBlock(int how) {
-    sigset_t mask;
-    sigemptyset(&mask);
-    sigaddset(&mask, SIGCHLD);
-    sigprocmask(how, &mask, NULL);
-}
+void prompt(string& inp) {
+    char buff[PATH_MAX];
+    getcwd(buff, PATH_MAX);
+    std::string wcd(buff);
+    std::string wd = wcd.substr(wcd.find_last_of("/") + 1);
+    cout << GREEN << wd << RESET << "$ ";
+    // inp = getinput();
+    getline(cin, inp);  // todo: write wrapper using non-canonical mode
 
-static void waitFg(pid_t pid) {
-    fgpid = pid;
-    sigset_t empty;
-    sigemptyset(&empty);
-    while (fgpid == pid) {
-        sigsuspend(&empty);
+    if (cin.bad()) {
+        cin.clear();
+        numJobs = 0;
+        cout << endl;
     }
-    toggleSIGCHLDBlock(SIG_UNBLOCK);
 }
 
 static void handleSIGINT(int sig) {
     std::cin.setstate(std::ios::badbit);
 }
 
-deque <char *> history;
-int history_size;
+void run_command(int idx) {
+    int fpgid = 0;  // fg process group id
+    int pipefd[2];
+    int prevfd[2];
+    toggleSIGCHLDBlock(SIG_BLOCK);
 
-void initialise_history() {
-    int history_file = open(".terminal_history.txt", O_RDONLY | O_CREAT, 0644);
-    FILE* fp = fdopen(history_file, "r");
-    char buff[1000];
-    while (fgets(buff, 1000, fp)) {
-        buff[strcspn(buff, "\n")] = 0;
-        history.push_back(strdup(buff));
-    }
-    history_size = history.size();
-    while(history.size() > HISTORY_SIZE) {
-        free(history.front());
-        history.pop_front();
-    }
-    fclose(fp);
-}
+    Job& job = *jobTable[idx];
+    int num_cmds = job.processes.size();
+    auto& processes = job.processes;
 
-void update_history(char *cmd) {
-    history.push_back(strdup(cmd));
-    history_size++;
-    while(history_size  > HISTORY_SIZE) {
-        free(history.front());
-        history.pop_front();
-        history_size--;
-    }
-}
-
-void print_history() {
-    int read = HISTORY_PRINT;
-    cout << "History Size: " << history_size << endl;
-    cout << "History: " << endl;
-    if(history_size < HISTORY_PRINT)
-        read = history_size;
-    for(int i = 1; i <= read; i++) {
-        cout << history[history_size - i] << endl;
-    }
-}
-
-void search_history() {
-    if(history_size == 0) {
-        cout << "No history found" << endl;
-        return;
-    }
-    cout << "Enter Search Term: ";
-    char * search_term = (char *)malloc(sizeof(char) * 1000);
-    scanf("%[^\n]", search_term);
-    getchar();
-    int flag = 0;
-    for(auto it = rbegin(history); it != rend(history) && (!flag); it++) {
-        if(strstr(*it, search_term)) {
-            cout << *it << endl;
-            flag = 1;
+    for (int i = 0; i < num_cmds; i++) {
+        if (i < num_cmds - 1)
+            pipe(pipefd);
+        pid_t cpid = fork();
+        if (cpid < 0) {  // error in forking
+            perror("fork");
+            exit(1);
         }
-    }
-    if(!flag) {
-        cout << "No match for search term in history" << endl;
-    }
-}
-
-void clean_history(){
-    int history_file = open(".terminal_history.txt", O_WRONLY);
-    FILE* fp = fdopen(history_file, "w");  
-    for(int i = 0; i < history.size(); i++){
-        fprintf(fp, "%s\n", history[i]);
-    }
-    fclose(fp);
-}
-
-vector<char*> autocomplete(char* input){
-    vector<char*> ret = {};
-    vector<char*> tokens;
-    char* token = strtok(input, "/");
-    while(token != NULL){
-        tokens.push_back(token);
-        token = strtok(NULL, "/");
-    }
-
-    char* dir_path = (char *)malloc(sizeof(char) * 200);
-    char* file_name = (char *)malloc(sizeof(char) * 200);
-    strcpy(dir_path, "./");
-    strcpy(file_name, tokens[tokens.size() - 1]);
-    int name_len = strlen(file_name);
-
-    if(tokens.size() == 0){
-        return ret;
-    } else if(tokens.size() > 1) {
-        for(int i = 0; i < tokens.size() - 1; i++){
-            strcat(dir_path, tokens[i]);
-            strcat(dir_path, "/");
-        }
-    }
-
-    DIR* dir = opendir(dir_path);
-    if(dir == NULL){
-        return ret;
-    }
-    struct dirent* entry;
-    while((entry = readdir(dir)) != NULL){
-        if(strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0){
-            continue;
-        }
-        char* name = (char *)malloc(sizeof(char) * 200);
-        strcpy(name, entry->d_name);
-        if (entry->d_type == DT_DIR){
-            name[strlen(name)] = '/';
-            name[strlen(name)] = '\0';
-        }
-        int flag = 1;
-        for(int i = 0; i < name_len; i++){
-            if(name[i] != file_name[i]){
-                flag = 0;
+        if (cpid == 0) {
+            toggleSIGCHLDBlock(SIG_UNBLOCK);
+            // reinstall signal-handlers
+            signal(SIGINT, SIG_DFL);
+            signal(SIGTSTP, SIG_DFL);
+            // open redirection files for end pipe commands
+            // if (i == 0 || i + 1 == num_cmds)
+            processes[i].open_fds();
+            // set fg process group id = pid(child1)
+            if (i == 0)
+                setpgrp();
+            else {
+                setpgid(0, fpgid);
+                // set input pipe file descriptor
+                dup2(prevfd[0], processes[i].fd_in);
+                // close unused pipe file descriptors
+                close(prevfd[0]);
+                close(prevfd[1]);
             }
-        }        
-        if(flag == 1)
-            ret.push_back(name);
+            if (i < num_cmds - 1) {
+                dup2(pipefd[1], processes[i].fd_out);
+                close(pipefd[1]);
+                close(pipefd[0]);
+            }
+            vector<char*> args = processes[i].get_argv();
+            execvp(args[0], args.data());
+            perror("execvp");
+            exit(1);
+        } else {
+            if (i == 0) {
+                fpgid = cpid;
+                setpgid(cpid, fpgid);
+                tcsetpgrp(STDIN_FILENO, fpgid);
+                job.pgid = fpgid;
+                job.status = RUNNING;
+            } else {
+                setpgid(cpid, fpgid);
+            }
+            if (i > 0) {
+                close(prevfd[0]);
+                close(prevfd[1]);
+            }
+            prevfd[0] = pipefd[0];
+            prevfd[1] = pipefd[1];
+            processes[i].pid = cpid;
+            job.num_active++;
+            proc2job[cpid] = idx;
+        }
     }
-    cout << dir_path << endl;
-    closedir(dir);
-    for(int i = 0; i < ret.size(); i++){
-        cout << ret[i] << endl;
-    }
-    return ret;
+    if (job.processes.back().bg == false) {  // todo: associate bg with a job and not a process
+        waitForeground(fpgid);
+    } else
+        toggleSIGCHLDBlock(SIG_UNBLOCK);
+    tcsetpgrp(STDIN_FILENO, getpid());
 }
-
 
 int main() {
-    std::string inp;
-
-    signal(SIGCHLD, reap);
-
+    signal(SIGCHLD, handleSIGCHLD);  // info: SA_RESTART is ok here
     struct sigaction sig_act;
-    sig_act.sa_handler = handleSIGINT;
+    sig_act.sa_handler = handleSIGINT;  // sets cin to badbit
     sigemptyset(&sig_act.sa_mask);
     sig_act.sa_flags = 0;
 
@@ -349,147 +172,97 @@ int main() {
     signal(SIGTTOU, SIG_IGN);
 
     while (!cin.eof()) {
+        string inp;
         prompt(inp);
-        if (num_cmds == 0)
+        if (inp.empty())
             continue;
-        Command* cmd_begin = cmds[0];
-        Command* cmd_end = cmds[num_cmds - 1];
+        Parser parser;
+        vector<Job*> joblist;
+        int numJobs = 0;
 
-        if (cmd_begin->cmd == "exit") {
-            break;
-        }
-        if (cmd_begin->cmd == "jobs") {
-            for (auto it = jobs.begin(); it != jobs.end(); it++) {
-                cout << it->pgid << ": " << getStatus(it->status) << "\n";
-                for (auto pit = it->processes.begin(); pit != it->processes.end(); pit++) {
-                    cout << "----> " << pit->pid << " " << pit->cmd;
-                    if (pit != it->processes.end() - 1)
-                        cout << " |\n";
+        parser.parse(inp, joblist, numJobs);
+
+        if (parser.is_builtin == true) {
+            string builtin_cmd = parser.builtin_cmd;
+            if (builtin_cmd == "exit") {
+                break;
+            } else if (builtin_cmd == "jobs") {
+                for (auto it = jobTable.begin(); it != jobTable.end(); it++) {
+                    cout << *(*it) << endl;
                 }
-                cout << endl;
-            }
-            continue;
-        }
-        if (cmd_begin->argv[0] == "bg") {
-            pid_t gpid = atoi(cmd_begin->argv[1].c_str());  // gpid is the pgid of the job
-            bool f = 0;
-            for (auto it = jobs.rbegin(); it != jobs.rend(); it++) {
-                if (it->pgid == gpid && it->status == STOPPED) {
-                    f = 1;
-                    break;
+            } else if (builtin_cmd == "fg") {
+                pid_t gpid = atoi(parser.builtin_argv[0].c_str());
+                bool flag = 0;
+                for (auto it = jobTable.rbegin(); it != jobTable.rend(); it++) {
+                    if ((*it)->pgid == gpid) {
+                        if ((*it)->status == STOPPED) {
+                            flag = 1;
+                        }
+                        break;
+                    }
                 }
-            }
-            if (!f) {
-                cout << "No such job" << endl;
+                if (!flag) {
+                    cout << "No such job" << endl;
+                    continue;
+                }
+                tcsetpgrp(STDIN_FILENO, gpid);
+                toggleSIGCHLDBlock(SIG_BLOCK);
+                kill(-gpid, SIGCONT);
+                waitForeground(gpid);
+                tcsetpgrp(STDIN_FILENO, getpid());
                 continue;
-            }
-            kill(-gpid, SIGCONT);
-            continue;
-        }
-        if (cmd_begin->argv[0] == "fg") {
-            pid_t gpid = atoi(cmd_begin->argv[1].c_str());  // check if gpid is valid or not
-            bool f = 0;
-            for (auto it = jobs.rbegin(); it != jobs.rend(); it++) {
-                if (it->pgid == gpid && it->status == STOPPED) {
-                    f = 1;
-                    break;
+
+            } else if (builtin_cmd == "bg") {
+                pid_t gpid = atoi(parser.builtin_argv[0].c_str());
+                bool flag = 0;
+                for (auto it = jobTable.rbegin(); it != jobTable.rend(); it++) {
+                    if ((*it)->pgid == gpid) {
+                        if ((*it)->status == STOPPED) {
+                            flag = 1;
+                        }
+                        break;
+                    }
                 }
-            }
-            if (!f) {
-                cout << "No such job" << endl;
+                if (!flag) {
+                    cout << "No such job" << endl;
+                    continue;
+                }
+                kill(-gpid, SIGCONT);
                 continue;
-            }
-            tcsetpgrp(STDIN_FILENO, gpid);
-            toggleSIGCHLDBlock(SIG_BLOCK);
-            kill(-gpid, SIGCONT);
-            waitFg(gpid);
-            tcsetpgrp(STDIN_FILENO, getpid());
-            continue;
-        }
 
-        int fpgid = 0;  // fg process group id
-        int pipefd[2];
-        int prevfd[2];
-        toggleSIGCHLDBlock(SIG_BLOCK);
+            } else if (builtin_cmd == "cd") {
+                string dir = parser.builtin_argv[0];
+                if (dir.empty()) {
+                    dir = getenv("HOME");
+                }
+                if (chdir(dir.c_str()) == -1) {
+                    perror("cd");
+                    continue;
+                }
+            } else if (builtin_cmd == "multiwatch") {
+                struct sigaction sig_old, sig_new;
+                sig_new.sa_handler = handler_multiwatch;
+                sigemptyset(&sig_new.sa_mask);
+                sig_new.sa_flags = SA_RESTART;
 
-        if (cmd_begin->argv[0] == "mulitwatch") {
-            // workflow: fork for cmd1, cmd2, cmd3, cmd4, etc
-        }
+                sigaction(SIGINT, &sig_new, &sig_old);
+                signal(SIGTSTP, SIG_IGN);
 
-        for (int i = 0; i < num_cmds; i++) {
-            if (i < num_cmds - 1)
-                pipe(pipefd);
-            pid_t cpid = fork();
-            if (cpid < 0) {  // error in forking
-                perror("fork");
-                exit(1);
+                builtin_multiwatch(joblist, parser.builtin_argv[0]);
+
+                sigaction(SIGINT, &sig_old, NULL);
+                sigaction(SIGTSTP, &sig_act, NULL);
             }
-            if (cpid == 0) {
-                toggleSIGCHLDBlock(SIG_UNBLOCK);
-                // reinstall signal-handlers
-                signal(SIGINT, SIG_DFL);
-                signal(SIGTSTP, SIG_DFL);
-                // open redirection files for end pipe commands
-                if (i == 0 || i + 1 == num_cmds)
-                    cmds[i]->open_fds();
-                // set fg process group id = pid(child1)
-                if (i == 0)
-                    setpgrp();
-                else {
-                    setpgid(0, fpgid);
-                    // set input pipe file descriptor
-                    dup2(prevfd[0], cmds[i]->fd_in);
-                    // close unused pipe file descriptors
-                    close(prevfd[0]);
-                    close(prevfd[1]);
-                }
-                if (i < num_cmds) {  // set output pipe file descriptor
-                    dup2(pipefd[1], cmds[i]->fd_out);
-                    close(pipefd[1]);
-                    close(pipefd[0]);
-                }
-                vector<char*> args = cmds[i]->vc_str();
-                execvp(args[0], args.data());
-                perror("execvp");
-                exit(1);
-            } else {
-                if (i == 0) {
-                    fpgid = cpid;
-                    setpgid(cpid, fpgid);
-                    tcsetpgrp(STDIN_FILENO, fpgid);
-                } else {
-                    setpgid(cpid, fpgid);
-                }
-                if (i > 0) {
-                    close(prevfd[0]);
-                    close(prevfd[1]);
-                }
-                prevfd[0] = pipefd[0];
-                prevfd[1] = pipefd[1];
-                if (i == 0) {
-                    jobs.push_back(Job(fpgid));
-                }
-                jobs.back().processes.push_back({cpid, cmds[i]->cmd});
-                proc2job[cpid] = jobs.size() - 1;
-            }
+        } else {
+            jobTable.push_back(joblist[0]);
+            run_command(jobTable.size() - 1);  // non-builtin command
         }
-        jobs.back()._cnt = num_cmds;
-        if (cmds.back()->bg == false) {
-            waitFg(fpgid);
-            // toggle to send SIGCONT instantly
-            /* if (jobs.back().status == STOPPED) {
-                kill(-fpgid, SIGCONT);
-            } */
-        } else
-            toggleSIGCHLDBlock(SIG_UNBLOCK);
-        tcsetpgrp(STDIN_FILENO, getpid());
     }
 }
 
 /**
  * @brief TODO: 1. add cd builtin.
  *              2. add autocomplete
- *              3. multiwatch
  *              4. history search
  *              5. cleanup on exit
  *              6. using termios for ctrl r, tab completion
