@@ -7,7 +7,7 @@
 #include <sstream>
 #include <string>
 #include <vector>
-
+#include <bits/stdc++.h>
 #include "shell.h"
 
 using namespace std;
@@ -37,7 +37,7 @@ vector<string> autocomplete(string input) {
     vector<string> tokens;
     stringstream ss(input);
     string token;
-    while (getline(ss, token, ' ')) {
+    while (getline(ss, token, '/')) {
         tokens.push_back(token);
     }
 
@@ -86,7 +86,7 @@ vector<string> autocomplete(string input) {
     }
     for (int i = 0; i < ret.size(); i++) {
         if (dir_path != ".") {
-            ret[i] = dir_path + "/" + ret[i];
+            ret[i] = dir_path + ret[i];
         }
     }
     return ret;
