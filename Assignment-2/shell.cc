@@ -176,7 +176,6 @@ int main() {
         prompt(inp);
         if (inp.empty())
             continue;
-        cout << inp << " len: " << inp.length() << endl;
         update_history(inp.c_str());
         Parser parser;
         vector<Job*> joblist;

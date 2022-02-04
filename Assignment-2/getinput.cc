@@ -217,9 +217,3 @@ string getinput() {
     tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
     return buff;
 }
-
-// int main() {
-//     string input = getinput();
-//     cout << input << endl;
-//     return 0;
-// }
