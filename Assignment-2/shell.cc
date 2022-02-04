@@ -248,6 +248,8 @@ int main() {
                 std::string wcd(buff);
                 CDIR = wcd.substr(wcd.find_last_of("/") + 1);
 
+            } else if (builtin_cmd == "history") {
+                print_history();
             } else if (builtin_cmd == "multiwatch") {
                 struct sigaction sig_old, sig_new;
                 sig_new.sa_handler = handler_multiwatch;

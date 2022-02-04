@@ -104,6 +104,11 @@ void Parser::parse(const string& inp, vector<Job*>& joblist, int& numJobs) {
         trim(token);
         builtin_argv.push_back(token);
         numJobs = 0;
+    } else if (token == "history") {
+        is_builtin = true;
+        builtin_cmd = "history";
+        numJobs = 0;
+        // cout << "history" << endl;
     } else if (token == "multiwatch") {
         is_builtin = true;
         builtin_cmd = "multiwatch";

@@ -160,6 +160,9 @@ string getinput() {
             int res_len = 0;
             int last_len = 0;
             string res;
+            vector<char*> results;
+            int idx = 0;
+            int tot = 0;
             while ((c = getchar()) != '\n') {
                 if (c == 127) {
                     if (iter) {
@@ -169,23 +172,31 @@ string getinput() {
                     }
                 } else if (c >= 32 && c <= 126) {
                     search_term[iter++] = c;
-                    search_term[iter] = '\0';
                     x++;
                     printf("%c", c);
-                } else {
+                } else if (c != 18) {
                     continue;
                 }
-                vector<char*> results = search_history(search_term);
-                if (results.size() == 0) {
-                    results.push_back(strdup("No results found"));
-                    res = "";
-                } else
-                    res = results[0];
+                search_term[iter] = '\0';
+                bool f = (c != 18 || tot == 0);
+                if (f) {
+                    results = search_history(search_term);
+                    if (results.size() == 0) {
+                        results.push_back(strdup("No results found"));
+                        res = "";
+                    } else
+                        res = results[0];
+                    tot = results.size();
+                    idx = 0;
+                } else {
+                    idx = min(idx + 1, tot - 1);
+                    res = results[idx];
+                }
                 move2(last_len + prompt_len, y - 1);
                 erase(last_len);
                 x = prompt_len;
-                printf("%s", results[0]);
-                last_len = strlen(results[0]);
+                printf("%s", results[idx]);
+                last_len = strlen(results[idx]);
                 x += last_len;
                 move2(search_prompt.size() + iter, y + 1);
             }

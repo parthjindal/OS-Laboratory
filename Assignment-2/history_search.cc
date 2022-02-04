@@ -13,9 +13,12 @@ using namespace std;
 
 deque<char *> history;
 int history_size;
+string history_fname;
 
 void initialise_history() {
-    FILE *fp = fopen(HISTORY_FILE, "r");
+    history_fname = string(getenv("HOME")) + string("/") + HISTORY_FILE;
+    cout << history_fname << endl;
+    FILE *fp = fopen(history_fname.c_str(), "a+");
     char buff[1000];
     while (fgets(buff, 1000, fp)) {
         buff[strcspn(buff, "\n")] = 0;
@@ -42,7 +45,6 @@ void update_history(const char *cmd) {
 
 void print_history() {
     int read = HISTORY_PRINT;
-    cout << "History Size: " << history_size << endl;
     cout << "History: " << endl;
     if (history_size < HISTORY_PRINT)
         read = history_size;
@@ -61,16 +63,14 @@ vector<char *> search_history(const char *search_term) {
     vector<int> indices;
     for (auto it = history.rbegin(); it != history.rend(); it++) {
         if (strstr(*it, search_term)) {  // use kmp later
-            results.clear();
             results.push_back(*it);
-            return results;
         }
     }
     return results;
 }
 
 void cleanup_history() {
-    FILE *fp = fopen(HISTORY_FILE, "w");
+    FILE *fp = fopen(history_fname.c_str(), "w");
     for (int i = 0; i < history_size; i++) {
         fprintf(fp, "%s\n", history[i]);
     }

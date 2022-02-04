@@ -56,7 +56,7 @@ void Process::open_fds() {
         dup2(fd_in, STDIN_FILENO);
     }
     if (outfile != "") {
-        fd_out = open(outfile.c_str(), O_WRONLY | O_CREAT, 0777);
+        fd_out = open(outfile.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0777);
         dup2(fd_out, STDOUT_FILENO);
     }
 }
