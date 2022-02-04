@@ -17,7 +17,6 @@ string history_fname;
 
 void initialise_history() {
     history_fname = string(getenv("HOME")) + string("/") + HISTORY_FILE;
-    cout << history_fname << endl;
     FILE *fp = fopen(history_fname.c_str(), "a+");
     char buff[1000];
     while (fgets(buff, 1000, fp)) {
