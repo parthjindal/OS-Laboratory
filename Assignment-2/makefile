@@ -1,10 +1,10 @@
 CC = g++
-FLAGS = -std=c++11 -O2 -g
+FLAGS = -std=c++11  -g
 
 all: shell.o parser.o process.o multiwatch.o sighandlers.o history_search.o autocomplete.o getinput.cc
 	$(CC) $(FLAGS) -o shell shell.o parser.o process.o multiwatch.o sighandlers.o history_search.o autocomplete.o getinput.cc
 clean:
-	rm -f parser.o process.o multiwatch.o sighandlers.o shell.o
+	rm -f parser.o process.o multiwatch.o sighandlers.o shell.o history_search.o autocomplete.o
 
 shell.o: shell.h shell.cc 
 	$(CC) $(FLAGS) -c shell.cc

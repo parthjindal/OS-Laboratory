@@ -16,7 +16,7 @@ int history_size;
 
 void initialise_history() {
     int history_file = open(HISTORY_FILE, O_RDONLY | O_CREAT, 0644);
-    FILE *fp = fdopen(history_file, "r");
+    FILE *fp = fopen(history_file, "r");
     char buff[1000];
     while (fgets(buff, 1000, fp)) {
         buff[strcspn(buff, "\n")] = 0;
@@ -31,7 +31,10 @@ void initialise_history() {
 }
 
 void update_history(const char *cmd) {
-    history.push_back(strdup(cmd));
+    printf("%s\n", cmd);
+    printf("cmd_len: %d\n", strlen(cmd));
+    char *cpy = strdup(cmd);
+    history.push_back(cpy);
     history_size++;
     while (history_size > HISTORY_SIZE) {
         free(history.front());
@@ -70,10 +73,13 @@ vector<char *> search_history(const char *search_term) {
 }
 
 void cleanup_history() {
-    int history_file = open(HISTORY_FILE, O_WRONLY);
-    FILE *fp = fdopen(history_file, "w");
-    for (int i = 0; i < history.size(); i++) {
-        fprintf(fp, "%s\n", history[i]);
+    print_history();
+    FILE *fp = fopen(HISTORY_FILE, "w");
+    for (int i = 0; i < history_size; i++) {
+        cout << history[i] << endl;
+        // fprintf(stderr, "%s\n", history[i]);
+        // fprintf(fp, "%s\n", history[i]);
     }
+    cout << "History Cleaned" << endl;
     fclose(fp);
 }

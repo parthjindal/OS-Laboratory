@@ -4,6 +4,7 @@
 
 #include <cstring>
 #include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -11,15 +12,14 @@
 
 using namespace std;
 
-char* longestCommonPrefix(vector<char*>& S) {
-    char* empty = (char*)malloc(sizeof(char));
-    empty[0] = '\0';
-    if (S.size() == 0) return empty;
+string longestCommonPrefix(vector<string>& S) {
+    string res;
+    if (S.size() == 0) return res;
     string prefix = S[0];
 
     for (int i = 1; i < S.size(); ++i) {
         string s = S[i];
-        if (s.size() == 0 || prefix == "") return empty;
+        if (s.size() == 0 || prefix == "") return res;
         prefix = prefix.substr(0, min(prefix.size(), s.size()));
 
         for (int k = 0; k < s.size() && k < prefix.size(); ++k) {
@@ -29,36 +29,34 @@ char* longestCommonPrefix(vector<char*>& S) {
             }
         }
     }
-    return strdup(prefix.c_str());
+    return prefix;
 }
 
-vector<char*> autocomplete(char* input) {
-    vector<char*> ret = {};
-    vector<char*> tokens;
-    char* token = strtok(input, "/");
-    while (token != NULL) {
+vector<string> autocomplete(string input) {
+    vector<string> ret = {};
+    vector<string> tokens;
+    stringstream ss(input);
+    string token;
+    while (getline(ss, token, ' ')) {
         tokens.push_back(token);
-        token = strtok(NULL, "/");
     }
 
-    char* dir_path = (char*)malloc(sizeof(char) * 200);
-    char* file_name = (char*)malloc(sizeof(char) * 200);
-    dir_path[0] = '\0';
-    strcpy(file_name, tokens[tokens.size() - 1]);
-    int name_len = strlen(file_name);
+    string dir_path;
+    string file_name;
+    file_name = tokens[tokens.size() - 1];
+    int name_len = file_name.size();
 
     if (tokens.size() == 0) {
         return ret;
     } else if (tokens.size() > 1) {
         for (int i = 0; i < tokens.size() - 1; i++) {
-            strcat(dir_path, tokens[i]);
-            strcat(dir_path, "/");
+            dir_path += tokens[i] + "/";
         }
     }
-    if (strlen(dir_path) == 0) {
-        strcpy(dir_path, ".");
+    if (dir_path == "") {
+        dir_path = ".";
     }
-    DIR* dir = opendir(dir_path);
+    DIR* dir = opendir(dir_path.c_str());
     if (dir == NULL) {
         return ret;
     }
@@ -67,11 +65,9 @@ vector<char*> autocomplete(char* input) {
         if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
             continue;
         }
-        char* name = (char*)malloc(sizeof(char) * 200);
-        strcpy(name, entry->d_name);
+        string name = entry->d_name;
         if (entry->d_type == DT_DIR) {
-            name[strlen(name)] = '/';
-            name[strlen(name)] = '\0';
+            name += "/";
         }
         int flag = 1;
         for (int i = 0; i < name_len; i++) {
@@ -83,14 +79,14 @@ vector<char*> autocomplete(char* input) {
             ret.push_back(name);
     }
     closedir(dir);
-    char* prefix = longestCommonPrefix(ret);
-    if (strlen(prefix) != strlen(file_name) && ret.size() > 1) {
+    string prefix = longestCommonPrefix(ret);
+    if ((prefix.size() > file_name.size()) && ret.size() > 1) {
         ret.clear();
         ret.push_back(prefix);
     }
     for (int i = 0; i < ret.size(); i++) {
-        if (strcmp(dir_path, ".") != 0) {
-            ret[i] = strcat(dir_path, ret[i]);
+        if (dir_path != ".") {
+            ret[i] = dir_path + "/" + ret[i];
         }
     }
     return ret;

@@ -120,19 +120,18 @@ string getinput() {
             string suff = buff.substr(id);
             if (suff.length() == 0)
                 continue;
-            char* suff_c = strdup(suff.c_str());
-            auto opts = autocomplete(suff_c);
+            auto opts = autocomplete(suff);
             if (opts.size() == 1) {
-                int len = strlen(opts[0]);
-                for (int i = num - id; opts[0][i]; i++) {
-                    buff.push_back(opts[0][i]);
+                int len = opts[0].size();
+                buff.insert(buff.end(), opts[0].begin() + (num - id), opts[0].end());
+                for (int i = num - id; i < len; i++) {
                     printf("%c", opts[0][i]);
-                    num++;
                 }
+                num = buff.size();
             } else if (opts.size() > 1) {
                 printf("\nEnter choice \n");
                 for (int i = 0; i < opts.size(); i++) {
-                    printf("%d. %s\n", i + 1, opts[i]);
+                    printf("%d. %s\n", i + 1, opts[i].c_str());
                 }
                 printf("Choice: ");
                 int choice = getint();
@@ -141,14 +140,12 @@ string getinput() {
                 printf("%s", buff.c_str());
                 if (choice == 0 || choice > opts.size())
                     continue;
-                int len = strlen(opts[choice - 1]);  // issue: eg: cd ../ cd Assignment- press tab enter any option then enter.
-                                                     // after prompt appears again, delete all characters,
-                                                     // cursor goes one more step back than required
+                int len = opts[choice - 1].size();
+                buff.insert(buff.end(), opts[choice - 1].begin() + (num - id), opts[choice - 1].end());
                 for (int i = num - id; i < len; i++) {
-                    buff.push_back(opts[choice - 1][i]);
                     printf("%c", opts[choice - 1][i]);
-                    num++;
                 }
+                num = buff.size();
             }
         } else if (c == 18) {
             x = 0;
