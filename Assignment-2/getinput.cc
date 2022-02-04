@@ -110,7 +110,7 @@ string getinput() {
                 buff.pop_back();
                 num--;
             } else {
-                printf("\a");
+                continue;
             }
         } else if (c == '\t') {
             if (num == 0)
@@ -141,7 +141,10 @@ string getinput() {
                 printf("%s", buff.c_str());
                 if (choice == 0 || choice > opts.size())
                     continue;
-                for (int i = num - id; opts[choice - 1][i]; i++) {
+                int len = strlen(opts[choice - 1]);  // issue: eg: cd ../ cd Assignment- press tab enter any option then enter.
+                                                     // after prompt appears again, delete all characters,
+                                                     // cursor goes one more step back than required
+                for (int i = num - id; i < len; i++) {
                     buff.push_back(opts[choice - 1][i]);
                     printf("%c", opts[choice - 1][i]);
                     num++;
@@ -219,11 +222,6 @@ string getinput() {
 }
 
 // int main() {
-//     for (int i = 0; i < 4; i++) {
-//         string s;
-//         getline(cin, s);
-//         update_history(strdup(s.c_str()));
-//     }
 //     string input = getinput();
 //     cout << input << endl;
 //     return 0;

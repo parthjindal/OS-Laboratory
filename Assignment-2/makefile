@@ -1,5 +1,5 @@
 CC = g++
-FLAGS = -std=c++11 -O2
+FLAGS = -std=c++11 -O2 -g
 
 all: shell.o parser.o process.o multiwatch.o sighandlers.o history_search.o autocomplete.o getinput.cc
 	$(CC) $(FLAGS) -o shell shell.o parser.o process.o multiwatch.o sighandlers.o history_search.o autocomplete.o getinput.cc

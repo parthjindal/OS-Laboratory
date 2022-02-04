@@ -233,6 +233,9 @@ int main() {
 
             } else if (builtin_cmd == "cd") {
                 string dir = parser.builtin_argv[0];
+                if (dir.find_last_of("/") != string::npos) {
+                    dir = dir.substr(0, dir.find_last_of("/"));
+                }
                 if (dir.empty()) {
                     dir = getenv("HOME");
                 }

@@ -21,6 +21,10 @@ vector<string> Parser::tokenize(const string& _cmd, char delim) {
 void Parser::trim(string& s, char delim) {
     if (s.size() == 0) return;
     size_t start = s.find_first_not_of(delim);
+    if (start == string::npos) {
+        s = "";
+        return;
+    }
     size_t end = s.find_last_not_of(delim);
     s = s.substr(start, end - start + 1);
 }
