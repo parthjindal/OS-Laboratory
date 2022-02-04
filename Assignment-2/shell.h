@@ -1,20 +1,12 @@
 #ifndef _SHELL_H
 #define _SHELL_H
 
-#include <cstdarg>
-#include <cstdio>
-#include <iostream>
-#include <regex>
 #include <string>
 #include <vector>
 
 #define RED "\033[0;31m"
 #define GREEN "\033[0;32m"
 #define RESET "\033[0m"
-
-#define HISTORY_FILE ".terminal_history.txt"
-#define HISTORY_SIZE 10000
-#define HISTORY_PRINT 1000
 
 // https://github.com/kuroidoruido/ColorLog/blob/master/colorlog.h
 #define _COLOR_RED "1;31"
@@ -25,6 +17,19 @@
 #define INFO_LOG(TXT, args...) __LOG_COLOR(stdout, _COLOR_GREEN, "info", TXT, ##args)
 #define DEBUG_LOG(TXT, args...) __LOG_COLOR(stderr, _COLOR_BLUE, "debug", TXT, ##args)
 #define ERROR_LOG(TXT, args...) __LOG_COLOR(stderr, _COLOR_RED, "error", TXT, ##args)
+
+extern std::string CDIR;
+extern int prompt_len;
+extern std::string prompt_str;
+extern bool CONTINUE;
+
+std::string getinput();
+
+#define PROMPT                                             \
+    do {                                                   \
+        std::cout << GREEN << CDIR << RESET << prompt_str; \
+        prompt_len = CDIR.size() + prompt_str.size();      \
+    } while (0)
 
 // class Parser {
 

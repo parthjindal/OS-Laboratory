@@ -149,7 +149,6 @@ void builtin_multiwatch(std::vector<Job*>& joblist, string outfile) {
             perror("read");
             return;
         }
-        sleep(10);
         int i = 0;
         while (i < n) {
             struct inotify_event* event = (struct inotify_event*)&events[i];
@@ -182,6 +181,9 @@ void builtin_multiwatch(std::vector<Job*>& joblist, string outfile) {
         fclose(outfp);
     for (int fd : readfds)  // close all fds
         close(fd);
-    close(inofd);    // close inofd if not closed already
-    pid2wd.clear();  // clear pid2wd
+    close(inofd);  // close inofd if not closed already
+    for (auto it : pid2wd) {
+        const char* fname = (".tmp" + to_string(it.first) + ".txt").c_str();
+        remove(fname);
+    }
 }

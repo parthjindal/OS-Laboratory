@@ -12,12 +12,11 @@
 #include <map>
 #include <vector>
 
+#include "history_search.h"
 #include "multiwatch.h"
 #include "parser.h"
 #include "process.h"
 #include "sighandlers.h"
-
-extern pid_t FG_PID;
 
 using namespace std;
 
@@ -25,6 +24,7 @@ map<pid_t, int> proc2job;  // pid -> Job index in Job Table
 vector<Job*> jobTable;
 int numJobs = 0;
 
+extern pid_t FG_PID;
 extern map<pid_t, int> pid2wd;
 extern pid_t inofd;  // inotify file descriptor
 
@@ -67,14 +67,8 @@ static void handleSIGCHLD(int sig) {
 }
 
 void prompt(string& inp) {
-    char buff[PATH_MAX];
-    getcwd(buff, PATH_MAX);
-    std::string wcd(buff);
-    std::string wd = wcd.substr(wcd.find_last_of("/") + 1);
-    cout << GREEN << wd << RESET << "$ ";
-    // inp = getinput();
-    getline(cin, inp);  // todo: write wrapper using non-canonical mode
-
+    PROMPT;
+    inp = getinput();  // todo: write wrapper using non-canonical mode
     if (cin.bad()) {
         cin.clear();
         numJobs = 0;
@@ -83,7 +77,7 @@ void prompt(string& inp) {
 }
 
 static void handleSIGINT(int sig) {
-    std::cin.setstate(std::ios::badbit);
+    // std::cin.setstate(std::ios::badbit);
 }
 
 void run_command(int idx) {
@@ -161,6 +155,12 @@ void run_command(int idx) {
 }
 
 int main() {
+    initialise_history();
+    char buff[PATH_MAX];
+    getcwd(buff, PATH_MAX);
+    std::string wcd(buff);
+    CDIR = wcd.substr(wcd.find_last_of("/") + 1);
+
     signal(SIGCHLD, handleSIGCHLD);  // info: SA_RESTART is ok here
     struct sigaction sig_act;
     sig_act.sa_handler = handleSIGINT;  // sets cin to badbit
@@ -171,11 +171,12 @@ int main() {
     sigaction(SIGINT, &sig_act, NULL);
     signal(SIGTTOU, SIG_IGN);
 
-    while (!cin.eof()) {
+    while (CONTINUE) {
         string inp;
         prompt(inp);
         if (inp.empty())
             continue;
+        update_history(inp.c_str());
         Parser parser;
         vector<Job*> joblist;
         int numJobs = 0;
@@ -239,6 +240,11 @@ int main() {
                     perror("cd");
                     continue;
                 }
+                char buff[PATH_MAX];
+                getcwd(buff, PATH_MAX);
+                std::string wcd(buff);
+                CDIR = wcd.substr(wcd.find_last_of("/") + 1);
+
             } else if (builtin_cmd == "multiwatch") {
                 struct sigaction sig_old, sig_new;
                 sig_new.sa_handler = handler_multiwatch;
@@ -258,6 +264,7 @@ int main() {
             run_command(jobTable.size() - 1);  // non-builtin command
         }
     }
+    cleanup_history();
 }
 
 /**
