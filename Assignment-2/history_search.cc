@@ -15,6 +15,32 @@ deque<char *> history;
 int history_size;
 string history_fname;
 
+vector<int> kmp(const string &s) {
+    int n = s.size();
+    vector<int> lps(n + 1);
+    int i = 0, j = -1;
+    lps[0] = -1;
+    while (i < n) {
+        while (j != -1 && s[i] != s[j]) j = lps[j];
+        i++, j++;
+        lps[i] = j;
+    }
+    return lps;
+}
+
+int strstr(const string &a, const string &b) {
+    string c = a + "#" + b;
+    vector<int> lps = kmp(c);
+    int n = a.size();
+    int m = b.size();
+    for (int i = n + 2; i <= n + m + 1; i++) {
+        if (lps[i] == m) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 void initialise_history() {
     history_fname = string(getenv("HOME")) + string("/") + HISTORY_FILE;
     FILE *fp = fopen(history_fname.c_str(), "a+");
