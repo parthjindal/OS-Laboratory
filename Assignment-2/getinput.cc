@@ -118,8 +118,8 @@ string getinput() {
             int id = buff.find_last_of(' ');
             id = id == string::npos ? 0 : id + 1;
             string suff = buff.substr(id);
-            if (suff.length() == 0)
-                continue;
+            // if (suff.length() == 0)
+            //     continue;
             auto opts = autocomplete(suff);
             if (opts.size() == 1) {
                 int len = opts[0].size();

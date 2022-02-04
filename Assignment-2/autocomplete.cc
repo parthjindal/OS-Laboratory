@@ -40,7 +40,9 @@ vector<string> autocomplete(string input) {
     while (getline(ss, token, '/')) {
         tokens.push_back(token);
     }
-
+    if (input.back() == '/' || tokens.size() == 0) { // if input is a directory
+        tokens.push_back("");
+    }
     string dir_path;
     string file_name;
     file_name = tokens[tokens.size() - 1];
