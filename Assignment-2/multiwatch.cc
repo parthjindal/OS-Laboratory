@@ -137,7 +137,8 @@ void builtin_multiwatch(std::vector<Job*>& joblist, string outfile) {
     FILE* outfp = (outfile == "") ? stdout : fopen(outfile.c_str(), "w");
     size_t len = sizeof(struct inotify_event);
 
-    struct inotify_event events[MAX_EVENTS * len];
+    char events[4096]
+        __attribute__((aligned(__alignof__(struct inotify_event))));
     char buff[1024];
 
     int count = (int)readfds.size();
@@ -171,7 +172,20 @@ void builtin_multiwatch(std::vector<Job*>& joblist, string outfile) {
             }
             if (event->mask & IN_IGNORED) {
                 int wd = event->wd;
-                int readfd = readfds[wd2job[wd]];
+                int rfd = readfds[wd2job[wd]];
+                int l = 0;
+                bool f = false;
+                while ((l = read(rfd, buff, sizeof(buff))) > 0 || errno == EINTR) {
+                    if (!f) {
+                        fprintf(outfp, "%s, %ld\n", joblist[wd2job[wd]]->_cmd.c_str(), time(0));
+                        fprintf(outfp, "----------------------------------------------------\n");
+                        f = true;
+                    }
+                    if (l > 0)
+                        fwrite(buff, 1, l, outfp);
+                }
+                if (f)
+                    fprintf(outfp, "----------------------------------------------------\n\n");
                 count--;
             }
             i += len + event->len;

@@ -118,7 +118,7 @@ void Parser::parse(const string& inp, vector<Job*>& joblist, int& numJobs) {
         for (auto it = _cmds.begin(); it != _cmds.end(); it++) {
             string cpy = *it;
             trim(cpy, ' ');
-            trim(cpy, '"');
+            // trim(cpy, '"');
             Job* job = new Job();
             job->_cmd = cpy;
             parse_job(cpy, *job);
