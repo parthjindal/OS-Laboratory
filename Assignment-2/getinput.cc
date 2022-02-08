@@ -89,8 +89,6 @@ void move2(int xx, int yy) {
     }
 }
 
-FILE* fp;
-
 string getinput() {
     struct termios oldt, newt;
     tcgetattr(STDIN_FILENO, &oldt);
@@ -118,8 +116,8 @@ string getinput() {
             int id = buff.find_last_of(' ');
             id = id == string::npos ? 0 : id + 1;
             string suff = buff.substr(id);
-            // if (suff.length() == 0)
-            //     continue;
+            if (suff.length() == 0)
+                continue;
             auto opts = autocomplete(suff);
             if (opts.size() == 1) {
                 int len = opts[0].size();
@@ -207,7 +205,6 @@ string getinput() {
             num = 0;
             if (res == "")
                 res.insert(res.end(), search_term, search_term + iter);
-
             buff.insert(buff.end(), res.begin(), res.end());
             num = buff.size();
             printf("%s", buff.c_str());

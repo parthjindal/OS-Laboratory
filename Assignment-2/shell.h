@@ -31,19 +31,4 @@ std::string getinput();
         prompt_len = CDIR.size() + prompt_str.size();      \
     } while (0)
 
-// class Parser {
-
-//     int _bg;
-//     std::regex re;
-
-//    public:
-//     Parser(){
-//         re = R"([\s]|"
-//     }
-//     parse(const std::string& cmd,
-//           vector<string>& tokens) {
-//         const std
-//     }
-// }
-
 #endif  // _SHELL_H
