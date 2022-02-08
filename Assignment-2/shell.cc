@@ -66,16 +66,6 @@ static void handleSIGCHLD(int sig) {
     }
 }
 
-void prompt(string& inp) {
-    PROMPT;
-    inp = getinput();  // todo: write wrapper using non-canonical mode
-    if (cin.bad()) {
-        cin.clear();
-        numJobs = 0;
-        cout << endl;
-    }
-}
-
 static void handleSIGINT(int sig) {
     // std::cin.setstate(std::ios::badbit);
 }
@@ -172,8 +162,7 @@ int main() {
     signal(SIGTTOU, SIG_IGN);
 
     while (CONTINUE) {
-        string inp;
-        prompt(inp);
+        string inp = getinput();
         if (inp.empty())
             continue;
         update_history(inp.c_str());

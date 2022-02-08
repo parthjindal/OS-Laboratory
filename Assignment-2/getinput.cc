@@ -90,6 +90,8 @@ void move2(int xx, int yy) {
 }
 
 string getinput() {
+    PROMPT;
+
     struct termios oldt, newt;
     tcgetattr(STDIN_FILENO, &oldt);
     newt = oldt;
@@ -98,9 +100,9 @@ string getinput() {
     newt.c_cc[VTIME] = 0;
     tcsetattr(STDIN_FILENO, TCSANOW, &newt);
 
-    string buff;
     char c;
     int num = 0;
+    string buff;
     while ((c = getchar()) != '\n') {
         if (c == 127) {  // backspace
             if (num > 0) {
