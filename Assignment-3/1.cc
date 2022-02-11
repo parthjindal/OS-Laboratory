@@ -46,12 +46,17 @@ int main() {
 
     for (int i = 0; i < r1; i++) {
         for (int j = 0; j < c1; j++) {
-            cin >> A[i][j];
+            // cin >> A[i][j];
+            if (i == j)
+                A[i][j] = 1;
+            else
+                A[i][j] = 0;
         }
     }
     for (int i = 0; i < r2; i++) {
         for (int j = 0; j < c2; j++) {
-            cin >> B[i][j];
+            // cin >> B[i][j];
+            B[i][j] = rand() % 10;
         }
     }
     for (int i = 0; i < r1; i++) {
@@ -71,6 +76,7 @@ int main() {
     for (int i = 0; i < r1; i++) {
         for (int j = 0; j < c2; j++) {
             cout << C[i][j] << " ";
+            assert(C[i][j] == B[i][j]);
         }
         cout << endl;
     }
