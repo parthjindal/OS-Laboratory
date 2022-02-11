@@ -27,9 +27,8 @@ int main() {
     int r1, c1, r2, c2;
     cin >> r1 >> c1 >> r2 >> c2;
     assert(c1 == r2);
-    key_t key = ftok("shmfile", 11);
     size_t size = sizeof(double) * (r1 * c1 + r2 * c2 + r1 * c2);
-    int shmid = shmget(key, size, IPC_CREAT | 0644);
+    int shmid = shmget(IPC_PRIVATE, size, IPC_CREAT | 0644);
     double* mem = (double*)(shmat(shmid, (void*)NULL, 0));
     double *_A[r1], *_B[r2], *_C[r1];
     for (int i = 0; i < r1; i++) {
