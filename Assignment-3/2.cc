@@ -9,11 +9,12 @@
 
 using namespace std;
 
-#define QUEUE_SIZE 9
-#define MAT_SIZE 1000
-#define MAT_SIZE_HALF 500
-#define SLEEP_TIME 3000001
-#define MAX_JOBS 2
+#define QUEUE_SIZE 11
+#define MAT_SIZE 10
+#define MAT_SIZE_HALF 5
+#define SLEEP_TIME 3001
+#define MAX_JOBS 30
+
 struct Job {
     int producer_num;
     int status;
@@ -35,7 +36,7 @@ struct Job {
         mat_id = rand() % 100000 + 1;
         for (int i = 0; i < MAT_SIZE; i++) {
             for (int j = 0; j < MAT_SIZE; j++) {
-                mat[i][j] = rand() % 19 - 9;
+                mat[i][j] = i + j;
             }
         }
     }
@@ -53,19 +54,38 @@ struct Job {
     }
 };
 
+ostream& operator<<(ostream& os, const Job& job) {
+    os << "JOB: [" << job.producer_num << "," << getpid() << "," << job.mat_id << "]";
+    return os;
+}
+
 struct SharedQueue {
     int num_jobs;
     int front;
     int rear;
-    int job_created;
     Job job_queue[QUEUE_SIZE];
     int workidx;
-    SharedQueue() {
+
+    void Init() {
         num_jobs = 0;
         front = 0;
         rear = 0;
-        job_created = 0;
         workidx = -1;
+    }
+};
+
+struct SharedMem {
+    SharedQueue queue;
+    pthread_mutex_t mutex;
+    int job_created;
+
+    void Init() {
+        queue.Init();
+        job_created = 0;
+        pthread_mutexattr_t attr;
+        pthread_mutexattr_init(&attr);
+        pthread_mutexattr_setpshared(&attr, PTHREAD_PROCESS_SHARED);
+        pthread_mutex_init(&mutex, &attr);
     }
 };
 
@@ -79,38 +99,15 @@ pair<int, int> get_mat_seg(int& status) {
     return {-1, -1};
 }
 
-SharedQueue* create_queue(int shm_key) {
-    cout << "create_queue" << endl;
-    SharedQueue* queue = (SharedQueue*)shmat(shm_key, NULL, 0);
-    queue->num_jobs = 0;
-    queue->front = 0;
-    queue->rear = 0;
-    queue->workidx = -1;
-    return queue;
-}
-
-void print_queue(SharedQueue* queue) {
-    cout << "Queue: ";
-    cout << "Size of queue: " << queue->num_jobs << endl;
-    cout << "Jobs Created: " << queue->job_created << endl;
-    for (int j = 0; j < queue->num_jobs; j++) {
-        int i = (queue->front + j) % QUEUE_SIZE;
-        cout << "(" << queue->front << ", " << i << ", " << queue->job_queue[i].producer_num << ", " << queue->job_queue[i].status << ", " << queue->job_queue[i].mat_size << ", " << queue->job_queue[i].mat_id << ") ";
-    }
-    cout << "\n\n";
-}
-
 bool is_full(SharedQueue* queue) {
-    return queue->num_jobs == QUEUE_SIZE - 1;
+    return queue->num_jobs >= (QUEUE_SIZE - 1);
 }
 
-bool insert_job(SharedQueue* queue, Job job) {
+bool insert_job(SharedQueue* queue, Job& job) {
     if (is_full(queue)) {
         return false;
     }
     queue->num_jobs++;
-    queue->job_created++;
-    // cout << "Job inserted at: " << queue->rear << endl;
     queue->job_queue[queue->rear] = job;
     queue->rear = (queue->rear + 1) % QUEUE_SIZE;
     return true;
@@ -121,122 +118,240 @@ void remove_job(SharedQueue* queue) {
     queue->num_jobs--;
 }
 
-void producer(SharedQueue* queue, int producer_num) {
-    while (true && queue->job_created < MAX_JOBS) {
+void producer(SharedMem* mem, int producer_num) {
+    srand(time(NULL) + getpid());
+    SharedQueue* queue = &mem->queue;
+    cout << "Producer: " << producer_num << endl;
+    while (1) {
+        if (pthread_mutex_lock(&mem->mutex) != 0) {
+            cout << "pthread_mutex_lock error" << endl;
+            exit(1);
+        }
+        if (mem->job_created == MAX_JOBS) {
+            pthread_mutex_unlock(&mem->mutex);
+            break;
+        }
+        pthread_mutex_unlock(&mem->mutex);
+
+        Job job(producer_num);
         int sleep_time = rand() % SLEEP_TIME;
         usleep(sleep_time);
-        if (is_full(queue)) {
-            cout << "Queue is full" << endl;
-            print_queue(queue);
-            continue;
+
+        if (pthread_mutex_lock(&mem->mutex) != 0) {
+            cout << "pthread_mutex_lock error" << endl;
+            exit(1);
         }
-        if (!is_full(queue)) {
-            Job* new_job = new Job(producer_num);
-            cout << "Create new job" << endl;
-            cout << new_job->producer_num << " " << new_job->status << " " << new_job->mat_size << " " << new_job->mat_id << endl;
-            insert_job(queue, *new_job);
-            print_queue(queue);
+
+        while (is_full(queue)) {
+            pthread_mutex_unlock(&mem->mutex);
+            usleep(1);
+            // cout << "Producer: " << producer_num << " is waiting for space" << endl;
+            if (pthread_mutex_lock(&mem->mutex) != 0) {
+                cout << "pthread_mutex_lock error" << endl;
+                exit(1);
+            }
+        }
+        if (mem->job_created != MAX_JOBS) {
+            mem->job_created++;
+            assert(insert_job(queue, job) == true);
+            cout << "Producer inserted job: " << producer_num << endl;
+            // cout << job << endl;
+            pthread_mutex_unlock(&mem->mutex);
+        } else {
+            pthread_mutex_unlock(&mem->mutex);
+            break;
         }
     }
 }
 
-void worker(SharedQueue* queue) {
-    cout << "Inside worker" << endl;
-    while (!(queue->job_created == MAX_JOBS && queue->num_jobs == 1)) {
-        if (queue->num_jobs < 2)
-            continue;
+void worker(SharedMem* mem, int worker_num) {
+    srand(time(NULL) + getpid());
+    cout << "Worker num: " << worker_num << endl;
+    SharedQueue& queue = mem->queue;
+
+    while (1) {
         int sleep_time = rand() % SLEEP_TIME;
         usleep(sleep_time);
-
-        cout << "-----------WORKER----------" << endl;
-
-        if (queue->workidx == -1) {
-            // add lock here
-            queue->workidx = queue->rear;
-            memset(queue->job_queue[queue->workidx].mat, 0, sizeof(queue->job_queue[queue->workidx].mat));
-            queue->rear = (queue->rear + 1) % QUEUE_SIZE;
-            queue->num_jobs++;
-            queue->job_queue[queue->workidx].mat_id = -1;
-            queue->job_queue[queue->workidx].producer_num = -1;
-            queue->job_queue[queue->workidx].status = 0;
-            cout << "Worker: " << queue->workidx << ": " << queue->num_jobs << endl;
-            // debmat(queue->job_queue[queue->front].mat,MAT_SIZE,MAT_SIZE);
-            // debmat(queue->job_queue[(queue->front+1)%QUEUE_SIZE].mat,MAT_SIZE,MAT_SIZE);
-            // remove lock here
+        if (pthread_mutex_lock(&mem->mutex) != 0) {
+            cout << "pthread_mutex_lock error" << endl;
+            exit(1);
         }
 
-        pair<int, int> segs = get_mat_seg(queue->job_queue[queue->front].status);
-        if (segs.first == -1) {
-            continue;
+        if (mem->job_created == MAX_JOBS && mem->queue.num_jobs == 1) {
+            if (pthread_mutex_unlock(&mem->mutex) != 0) {
+                cout << "pthread_mutex_unlock error" << endl;
+                exit(1);
+            }
+            break;
         }
 
-        int mat[MAT_SIZE_HALF][MAT_SIZE_HALF];
-        for (int i = 0; i < MAT_SIZE_HALF; i++) {
-            for (int j = 0; j < MAT_SIZE_HALF; j++) {
-                mat[i][j] = 0;
-                for (int k = 0; k < MAT_SIZE_HALF; k++) {
-                    mat[i][j] += queue->job_queue[queue->front].mat[i + (segs.first / 2) * MAT_SIZE_HALF][k + (segs.first % 2) * MAT_SIZE_HALF] * queue->job_queue[(queue->front + 1) % QUEUE_SIZE].mat[k + (segs.second / 2) * MAT_SIZE_HALF][j + (segs.second % 2) * MAT_SIZE_HALF];
+        while (mem->queue.num_jobs <= 1 && !(mem->job_created == MAX_JOBS && mem->queue.num_jobs == 1)) {
+            if (pthread_mutex_unlock(&mem->mutex) != 0) {
+                cout << "pthread_mutex_unlock error" << endl;
+                exit(1);
+            }
+            usleep(1);
+            cout << "Worker " << worker_num << " waiting for job" << endl;
+            if (pthread_mutex_lock(&mem->mutex) != 0) {
+                cout << "pthread_mutex_lock error" << endl;
+                exit(1);
+            }
+        }
+
+        if (mem->job_created == MAX_JOBS && mem->queue.num_jobs == 1) {
+            if (pthread_mutex_unlock(&mem->mutex) != 0) {
+                cout << "pthread_mutex_unlock error" << endl;
+                exit(1);
+            }
+            break;
+        }
+
+        pair<int, int> segs = get_mat_seg(mem->queue.job_queue[mem->queue.front].status);
+        if (segs.first != -1) {
+            if (segs.first == 0 && segs.second == 0) {  // first time
+                cout << getpid() << " Worker " << worker_num << " started job: " << endl;
+                if (mem->queue.job_queue[mem->queue.front].status != 1) {
+                    cout << getpid() << " " << mem->queue.job_queue[mem->queue.front].status << "--------" << endl;
+                    cout << getpid() << " " << mem->queue.front << "--------" << endl;
+                    exit(1);
                 }
-            }
-        }
-        // debmat(mat, MAT_SIZE_HALF, MAT_SIZE_HALF);
-
-        // acquire lock here again
-        for (int i = 0; i < MAT_SIZE_HALF; i++) {
-            for (int j = 0; j < MAT_SIZE_HALF; j++) {
-                queue->job_queue[queue->workidx].mat[i + (segs.first / 2) * MAT_SIZE_HALF][j + (segs.second % 2) * MAT_SIZE_HALF] += mat[i][j];
-            }
-        }
-
-        queue->job_queue[(queue->front + 1) % QUEUE_SIZE].status++;
-
-        // remove lock here again
-        if (queue->job_queue[(queue->front + 1) % QUEUE_SIZE].status == 8) {
-            cout << "removing front 2 jobs" << endl;
-            int mat[MAT_SIZE][MAT_SIZE];
-            for (int i = 0; i < MAT_SIZE; i++) {
-                for (int j = 0; j < MAT_SIZE; j++) {
-                    mat[i][j] = 0;
-                    for (int k = 0; k < MAT_SIZE; k++) {
-                        mat[i][j] += queue->job_queue[queue->front].mat[i][k] * queue->job_queue[(queue->front + 1) % QUEUE_SIZE].mat[k][j];
+                mem->queue.workidx = mem->queue.rear;
+                mem->queue.rear = (mem->queue.rear + 1) % QUEUE_SIZE;
+                mem->queue.num_jobs++;
+                mem->queue.job_queue[mem->queue.workidx].status = 0;
+                for (int i = 0; i < MAT_SIZE; i++) {
+                    for (int j = 0; j < MAT_SIZE; j++) {
+                        mem->queue.job_queue[mem->queue.workidx].mat[i][j] = 0;
                     }
-                    assert(mat[i][j] == queue->job_queue[queue->workidx].mat[i][j]);
                 }
             }
-            // debmat(mat, MAT_SIZE, MAT_SIZE);
-            // debmat(queue->job_queue[queue->workidx].mat, MAT_SIZE, MAT_SIZE);
-            remove_job(queue);
-            remove_job(queue);
-            queue->workidx = -1;
+            cout << getpid() << " "
+                 << "Worker: " << worker_num << " " << segs.first << " " << segs.second << endl;
+            cout << getpid() << " "
+                 << "Queue: " << mem->queue.num_jobs << " " << mem->queue.front << " " << mem->queue.rear << endl;
+            cout << getpid() << " " << __LINE__ << " " << bitset<8>(mem->queue.job_queue[mem->queue.front].status) << endl;
+            
+            int front = mem->queue.front;
+            int front1 = (mem->queue.front + 1) % QUEUE_SIZE;
+
+            if (pthread_mutex_unlock(&mem->mutex) != 0) {
+                cout << "pthread_mutex_unlock error" << endl;
+                exit(1);
+            }
+
+            int mat[MAT_SIZE_HALF][MAT_SIZE_HALF];
+            for (int i = 0; i < MAT_SIZE_HALF; i++) {
+                for (int j = 0; j < MAT_SIZE_HALF; j++) {
+                    mat[i][j] = 0;
+                    for (int k = 0; k < MAT_SIZE_HALF; k++) {
+                        int a = i + (segs.first / 2) * MAT_SIZE_HALF;
+                        int b = k + (segs.first % 2) * MAT_SIZE_HALF;
+
+                        int c = k + (segs.second / 2) * MAT_SIZE_HALF;
+                        int d = j + (segs.second % 2) * MAT_SIZE_HALF;
+
+                        mat[i][j] += mem->queue.job_queue[front].mat[a][b] *
+                                     mem->queue.job_queue[front1].mat[c][d];
+                    }
+                }
+            }
+
+            if (pthread_mutex_lock(&mem->mutex) != 0) {
+                cout << "pthread_mutex_lock error" << endl;
+                exit(1);
+            }
+            for (int i = 0; i < MAT_SIZE_HALF; i++) {
+                for (int j = 0; j < MAT_SIZE_HALF; j++) {
+                    int a = i + (segs.first / 2) * MAT_SIZE_HALF;
+                    int d = j + (segs.second % 2) * MAT_SIZE_HALF;
+                    assert(a < MAT_SIZE && d < MAT_SIZE);
+                    mem->queue.job_queue[mem->queue.workidx].mat[a][d] += mat[i][j];
+                }
+            }
+
+            cout << "\n\nWorker:" << worker_num << endl;
+            cout << "Status: " << bitset<8>(mem->queue.job_queue[mem->queue.workidx].status) << endl;
+            cout << "segs:" << segs.first << " " << segs.second << endl;
+            cout << "Segs: " << segs.first / 2 << " " << segs.second % 2 << endl;
+            cout << "Front: " << front << " " << front1 << endl;
+
+            if ((++mem->queue.job_queue[mem->queue.workidx].status) == 8) {
+                cout << "Popping front jobs at: " << front << " " << front1 << endl;
+
+                mem->queue.job_queue[front].status = 0;
+                mem->queue.job_queue[front1].status = 0;
+
+                remove_job(&mem->queue);
+                remove_job(&mem->queue);
+
+                cout << "Worker Inserted job: " << endl;
+                mem->queue.job_queue[mem->queue.workidx].status = 0;
+            }
+            if (pthread_mutex_unlock(&mem->mutex) != 0) {
+                cout << "pthread_mutex_unlock error" << endl;
+                exit(1);
+            }
+        }
+        if (pthread_mutex_unlock(&mem->mutex) != 0) {
+            cout << "pthread_mutex_unlock error" << endl;
+            exit(1);
         }
     }
+}
+
+int shmid;
+void sigint_handler(int signum) {
+    shmctl(shmid, IPC_RMID, NULL);
+    exit(1);
 }
 
 int main() {
-    int shm_id = shmget(IPC_PRIVATE, sizeof(SharedQueue), IPC_CREAT | 0666);
-    SharedQueue* queue = create_queue(shm_id);
+    shmid = shmget(IPC_PRIVATE, sizeof(SharedMem), IPC_CREAT | 0666);
+    SharedMem* mem = (SharedMem*)(shmat(shmid, (void*)0, 0));
+    mem->Init();
+    signal(SIGINT, sigint_handler);
     cout << "Queue created" << endl;
-    int num_producers = 2;
 
-    for (int i = 0; i < num_producers; i++) {
-        pid_t pid = fork();  // Create a child process for the producer i
-        if (pid == 0 && (i % 2 == 0)) {
-            producer(queue, i);
-            exit(0);
+    int num_workers, num_producers;
+    cout << "Number of workers: ";
+    cin >> num_workers;
+    cout << "Number of producers: ";
+    cin >> num_producers;
+
+    vector<pid_t> prcs;
+    for (int i = 1; i <= num_producers; i++) {
+        pid_t pid = fork();
+        if (pid < 0) {
+            perror("fork");
+            exit(1);
         }
-        if (pid == 0 && (i % 2)) {
-            worker(queue);
+        if (pid == 0) {
+            producer(mem, i);
             exit(0);
+        } else
+            prcs.push_back(pid);
+    }
+    for (int i = 1; i <= num_workers; i++) {
+        pid_t pid = fork();
+        if (pid < 0) {
+            perror("fork");
+            exit(1);
         }
+        if (pid == 0) {
+            worker(mem, -i);
+            exit(0);
+        } else
+            prcs.push_back(pid);
     }
 
-    // while(true) {
-    //     int sleep_time = rand() % 5;
-    //     sleep(sleep_time);
-    //     remove_job(queue);
-    // }
     while ((wait(NULL)) > 0)
         ;
-    shmdt(queue);
-    shmctl(shm_id, IPC_RMID, NULL);
+    for (int i = 0; i < MAT_SIZE; i++) {
+        for (int j = 0; j < MAT_SIZE; j++) {
+            cout << mem->queue.job_queue[mem->queue.front].mat[i][j] << " ";
+        }
+        cout << endl;
+    }
+    shmdt(mem);
+    shmctl(shmid, IPC_RMID, NULL);
 }
