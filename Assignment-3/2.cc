@@ -370,7 +370,6 @@ int main() {
     while ((wait(NULL)) > 0)
         ;
 
-    // print in green
     cout << "\033[0;32m" << "MULTIPLICATION COMPLETED SUCCESSFULLY\n\n";
 
     // for (int i = 0; i < MAT_SIZE; i++) {
