@@ -1,10 +1,10 @@
 #include <sys/shm.h>
-#include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include <cassert>
+#include <iomanip>
 #include <iostream>
+
 using namespace std;
 
 struct ProcessData {
@@ -23,63 +23,83 @@ void mult(ProcessData* pd) {
     }
 }
 
+void print_mat(double** mat, int r, int c) {
+    cout << "[";
+    for (int i = 0; i < r; i++) {
+        cout << (i == 0 ? "" : " ") << "[";
+        for (int j = 0; j < c; j++) {
+            cout << setw(7) << mat[i][j] << ((j != c - 1) ? " " : "");
+        }
+        cout << "]" << ((i != r - 1) ? "\n" : "");
+    }
+    cout << "]";
+}
+
 int main() {
     int r1, c1, r2, c2;
+    cout << "Enter r1, c1, r2, c2" << endl;
     cin >> r1 >> c1 >> r2 >> c2;
-    assert(c1 == r2);
-    size_t size = sizeof(double) * (r1 * c1 + r2 * c2 + r1 * c2);
+    if (c1 != r2) {
+        cout << "c1 != r1" << endl;
+        return 0;
+    }
+    cout << fixed << setprecision(4);
+
+    srand(time(NULL));
+    size_t size = sizeof(double) * (r1 * c1 + r2 * c2 + r1 * c2) + sizeof(double*) * (r1 + r2 + r1);
     int shmid = shmget(IPC_PRIVATE, size, IPC_CREAT | 0644);
     double* mem = (double*)(shmat(shmid, (void*)NULL, 0));
-    double *_A[r1], *_B[r2], *_C[r1];
-    for (int i = 0; i < r1; i++) {
-        _A[i] = mem + i * c1;
-    }
-    for (int i = 0; i < r2; i++) {
-        _B[i] = mem + r1 * c1 + i * c2;
-    }
-    for (int i = 0; i < r1; i++) {
-        _C[i] = mem + r1 * c1 + r2 * c2 + i * c2;
-    }
-    double** A = (double**)_A;
-    double** B = (double**)_B;
-    double** C = (double**)_C;
+    double** mem2 = (double**)(mem + r1 * c1 + r2 * c2 + r1 * c2);
+
+    for (int i = 0; i < r1; i++)
+        mem2[i] = mem + i * c1;
+    for (int i = 0; i < r2; i++)
+        mem2[i + r1] = mem + r1 * c1 + i * c2;
+    for (int i = 0; i < r1; i++)
+        mem2[i + r1 + r2] = mem + r1 * c1 + r2 * c2 + i * c2;
+
+    double** A = mem2;
+    double** B = mem2 + r1;
+    double** C = mem2 + r1 + r2;
 
     for (int i = 0; i < r1; i++) {
         for (int j = 0; j < c1; j++) {
-            // cin >> A[i][j];
-            if (i == j)
-                A[i][j] = 1;
-            else
-                A[i][j] = 0;
+            A[i][j] = (rand() % 2001 - 1000) * 1.0 / 1000.0;
         }
     }
+    cout << "A:\n";
+    print_mat(A, r1, c1);
+    cout << "\n";
+
     for (int i = 0; i < r2; i++) {
         for (int j = 0; j < c2; j++) {
-            // cin >> B[i][j];
-            B[i][j] = rand() % 10;
+            B[i][j] = (rand() % 2001 - 1000) * 1.0 / 1000.0;
         }
     }
+    cout << "\nB:\n";
+    print_mat(B, r2, c2);
+    cout << "\n";
+
     for (int i = 0; i < r1; i++) {
         for (int j = 0; j < c2; j++) {
             pid_t pid = fork();
             if (pid == 0) {
                 ProcessData pd = {A, B, C, c1, i, j};
                 mult(&pd);
-                shmdt(mem);
                 exit(0);
-            } else
-                continue;
+            }
+            if (pid == -1) {
+                perror("fork");
+                exit(1);
+            }
         }
     }
+
     while (wait(NULL) != -1)
         ;
-    for (int i = 0; i < r1; i++) {
-        for (int j = 0; j < c2; j++) {
-            cout << C[i][j] << " ";
-            assert(C[i][j] == B[i][j]);
-        }
-        cout << endl;
-    }
+    cout << "\nC:\n";
+    print_mat(C, r1, c2);
+
     shmdt(mem);
     shmctl(shmid, IPC_RMID, NULL);
 }
