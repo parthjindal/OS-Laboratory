@@ -9,11 +9,11 @@
 
 using namespace std;
 
-#define QUEUE_SIZE 11
+#define QUEUE_SIZE 4
 #define MAT_SIZE 10
 #define MAT_SIZE_HALF 5
 #define SLEEP_TIME 3001
-#define MAX_JOBS 30
+#define MAX_JOBS 5
 
 struct Job {
     int producer_num;
@@ -158,7 +158,7 @@ void producer(SharedMem* mem, int producer_num) {
             mem->job_created++;
             assert(insert_job(queue, job) == true);
             cout << "\nNEW JOB GENERATED" << endl;
-            cout << "Job Inserted by Producer" << producer_num << endl;
+            cout << "Job Inserted by Producer" << endl;
             cout << job;
             pthread_mutex_unlock(&mem->mutex);
         } else {
@@ -224,7 +224,7 @@ void worker(SharedMem* mem, int worker_num) {
                 mem->queue.num_jobs++;
                 mem->queue.job_queue[mem->queue.workidx].status = 0;
                 mem->queue.job_queue[mem->queue.workidx].producer_num = worker_num;
-                
+
                 for (int i = 0; i < MAT_SIZE; i++) {
                     for (int j = 0; j < MAT_SIZE; j++) {
                         mem->queue.job_queue[mem->queue.workidx].mat[i][j] = 0;
@@ -238,13 +238,13 @@ void worker(SharedMem* mem, int worker_num) {
             int front = mem->queue.front;
             int front1 = (mem->queue.front + 1) % QUEUE_SIZE;
 
-            cout << "\nBlocks Fetched by Worker ID:" << worker_num << endl;
+            cout << "\nBlocks Fetched by Worker ID: " << worker_num << endl;
             cout << "First Matrix Producer Number: " << mem->queue.job_queue[front].producer_num << endl;
             cout << "First Matrix ID: " << mem->queue.job_queue[front].mat_id << endl;
-            cout << "Retrieved Block Number: " << segs.first + 1 << endl;
+            cout << "First Matrix Retrieved Block Number: " << segs.first + 1 << endl;
             cout << "Second Matrix Producer Number: " << mem->queue.job_queue[front].producer_num << endl;
             cout << "Second Matrix ID: " << mem->queue.job_queue[front1].mat_id << endl;
-            cout << "Retrieved Block Number: " << segs.second + 1 << endl;
+            cout << "Second Matrix Retrieved Block Number: " << segs.second + 1 << endl;
             cout << endl;
 
             if (pthread_mutex_unlock(&mem->mutex) != 0) {
