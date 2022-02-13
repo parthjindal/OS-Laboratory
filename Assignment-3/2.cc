@@ -322,12 +322,16 @@ int main() {
     SharedMem* mem = (SharedMem*)(shmat(shmid, (void*)0, 0));
     mem->Init();
     signal(SIGINT, sigint_handler);
-    cout << "Queue created" << endl;
+    cout << "-----SET PARAMETERS-----" << endl;
+    cout << "MATRIX DIMENTION: " << MAT_SIZE << " * " << MAT_SIZE << endl;
+    cout << "MAXIMUM QUEUE SIZE: " << QUEUE_SIZE << endl;
+    cout << "TOTAL NUMBER OF JOBS: " << MAX_JOBS << endl;
+    cout << endl;
 
     int num_workers, num_producers;
-    cout << "Number of workers: ";
+    cout << "Enter number of workers: ";
     cin >> num_workers;
-    cout << "Number of producers: ";
+    cout << "Enter number of producers: ";
     cin >> num_producers;
 
     cout << endl;
@@ -365,6 +369,9 @@ int main() {
 
     while ((wait(NULL)) > 0)
         ;
+
+    // print in green
+    cout << "\033[0;32m" << "MULTIPLICATION COMPLETED SUCCESSFULLY\n\n";
 
     // for (int i = 0; i < MAT_SIZE; i++) {
     //     for (int j = 0; j < MAT_SIZE; j++) {
