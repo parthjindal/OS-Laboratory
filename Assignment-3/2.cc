@@ -1,4 +1,3 @@
-#include <bits/stdc++.h>
 #include <pthread.h>
 #include <signal.h>
 #include <sys/ipc.h>
@@ -7,18 +6,23 @@
 #include <time.h>
 #include <unistd.h>
 
-using namespace std;
+#include <cassert>
+#include <chrono>
+#include <iostream>
+#include <string>
+#include <vector>
 
-#define QUEUE_SIZE 4
-#define MAT_SIZE 100
+using namespace std;
+using namespace std::chrono;
+
+int max_jobs;
+
+#define QUEUE_SIZE 9
+#define MAT_SIZE 1000
 #define MAT_SIZE_HALF (MAT_SIZE / 2)
-#define SLEEP_TIME 3001
-#define MAX_JOBS 2
+#define SLEEP_TIME 3000001
 #define HEADER ("\033[1;31m" + to_string(getpid()) + "\033[0m")
 
-// todo
-// - finally format code
-// - add kill signal to all processes in main process when max jobs is reached and num jobs = 1
 class Job {
    public:
     int producer_num;
@@ -136,7 +140,7 @@ void producer(SharedMem *mem, int producer_num) {
             cout << "pthread_mutex_lock error" << endl;
             exit(1);
         }
-        if (mem->job_created == MAX_JOBS) {
+        if (mem->job_created == max_jobs) {
             pthread_mutex_unlock(&mem->mutex);
             break;
         }
@@ -154,13 +158,12 @@ void producer(SharedMem *mem, int producer_num) {
         while (is_full(queue)) {
             pthread_mutex_unlock(&mem->mutex);
             usleep(10);
-            // cout << "Producer: " << producer_num << " is waiting for space" << endl;
             if (pthread_mutex_lock(&mem->mutex) != 0) {
                 cout << "pthread_mutex_lock error" << endl;
                 exit(1);
             }
         }
-        if (mem->job_created != MAX_JOBS) {
+        if (mem->job_created != max_jobs) {
             mem->job_created++;
             assert(insert_job(queue, job) == true);
             cout << HEADER << "\nNEW JOB GENERATED" << endl;
@@ -176,7 +179,6 @@ void producer(SharedMem *mem, int producer_num) {
 
 void worker(SharedMem *mem, int worker_num) {
     srand(time(NULL) + getpid());
-    // cout << "Initiated Worker with ID: " << worker_num << endl;
     SharedQueue &queue = mem->queue;
 
     while (1) {
@@ -189,7 +191,7 @@ void worker(SharedMem *mem, int worker_num) {
             exit(1);
         }
 
-        if (mem->job_created == MAX_JOBS && mem->queue.num_jobs == 1) {
+        if (mem->job_created == max_jobs && mem->queue.num_jobs == 1) {
             if (pthread_mutex_unlock(&mem->mutex) != 0) {
                 cout << __LINE__ << " pthread_mutex_unlock error" << endl;
 
@@ -200,13 +202,12 @@ void worker(SharedMem *mem, int worker_num) {
             break;
         }
 
-        while (mem->queue.num_jobs <= 1 && !(mem->job_created == MAX_JOBS && mem->queue.num_jobs == 1)) {
+        while (mem->queue.num_jobs <= 1 && !(mem->job_created == max_jobs && mem->queue.num_jobs == 1)) {
             if (pthread_mutex_unlock(&mem->mutex) != 0) {
                 cout << __LINE__ << " pthread_mutex_unlock error" << endl;
                 exit(1);
             }
             usleep(10);
-            // cout << "Worker " << worker_num << " waiting for job" << endl;
             if (pthread_mutex_lock(&mem->mutex) != 0) {
                 cout << "pthread_mutex_lock error" << endl;
                 perror("pthread_mutex_unlock");
@@ -215,7 +216,7 @@ void worker(SharedMem *mem, int worker_num) {
             }
         }
 
-        if (mem->job_created == MAX_JOBS && mem->queue.num_jobs == 1) {
+        if (mem->job_created == max_jobs && mem->queue.num_jobs == 1) {
             if (pthread_mutex_unlock(&mem->mutex) != 0) {
                 cout << __LINE__ << " pthread_mutex_unlock error" << endl;
                 perror("pthread_mutex_unlock");
@@ -228,10 +229,8 @@ void worker(SharedMem *mem, int worker_num) {
         pair<int, int> segs = get_mat_seg(mem->queue.job_queue[mem->queue.front].status);
         if (segs.first != -1) {
             if (segs.first == 0 && segs.second == 0) {  // first time
-                // cout << getpid() << " Worker " << worker_num << " started job: " << endl;
+
                 if (mem->queue.job_queue[mem->queue.front].status != 1) {
-                    cout << getpid() << " " << mem->queue.job_queue[mem->queue.front].status << "--------" << endl;
-                    cout << getpid() << " " << mem->queue.front << "--------" << endl;
                     exit(1);
                 }
                 mem->queue.workidx = mem->queue.rear;
@@ -303,7 +302,7 @@ void worker(SharedMem *mem, int worker_num) {
                 }
             }
 
-            int p = ((segs.first >> 1) << 1) + (segs.second % 2);
+            int p = (segs.first & 2) + (segs.second % 2);
 
             cout << HEADER << "\nBlocks Fetched by Worker ID: " << worker_num << endl;
             cout << "First Matrix Producer Number: " << mem->queue.job_queue[front].producer_num << endl;
@@ -354,7 +353,7 @@ int main() {
     cout << "-----SET PARAMETERS-----" << endl;
     cout << "MATRIX DIMENTION: " << MAT_SIZE << " * " << MAT_SIZE << endl;
     cout << "MAXIMUM QUEUE SIZE: " << QUEUE_SIZE << endl;
-    cout << "TOTAL NUMBER OF JOBS: " << MAX_JOBS << endl;
+    cout << "MAXIMUM WAITING TIME: " << (SLEEP_TIME-1) << " microseconds" << endl;
     cout << endl;
 
     int num_workers, num_producers;
@@ -362,7 +361,10 @@ int main() {
     cin >> num_workers;
     cout << "Enter number of producers: ";
     cin >> num_producers;
+    cout << "Enter number of matrices: ";
+    cin >> max_jobs;
 
+    auto start = chrono::high_resolution_clock::now();
     vector<pid_t> prcs;
     for (int i = 1; i <= num_producers; i++) {
         pid_t pid = fork();
@@ -396,12 +398,37 @@ int main() {
 
     int pid;
     int status;
-    while ((wait(&status)) > 0) {
-        // cout << WEXITSTATUS(status) << endl;
-    };
+    std::chrono::microseconds duration;
+
+    while (1) {
+        usleep(100);
+        pthread_mutex_lock(&mem->mutex);
+        if (mem->job_created == max_jobs && mem->queue.num_jobs == 1) {
+            auto end = chrono::high_resolution_clock::now();
+            duration = chrono::duration_cast<chrono::microseconds>(end - start);
+            for (int i = 0; i < prcs.size(); i++) {
+                pid = prcs[i];
+                kill(pid, SIGINT);
+            }
+            pthread_mutex_unlock(&mem->mutex);
+            break;
+        }
+        pthread_mutex_unlock(&mem->mutex);
+    }
 
     cout << "\033[0;32m"
-         << "MULTIPLICATION COMPLETED SUCCESSFULLY\n\n";
+         << "MULTIPLICATION COMPLETED SUCCESSFULLY\033[0m\n"
+         << endl;
+
+    cout << "TIME TAKEN: " << duration.count() << " microseconds\n";
+
+    long long trace = 0;
+    for (int i = 0; i < MAT_SIZE; i++) {
+        for (int j = 0; j < MAT_SIZE; j++) {
+            trace += mem->queue.job_queue[mem->queue.front].mat[i][j];
+        }
+    }
+    cout << "TRACE: " << trace << "\n\n";
 
     pthread_mutex_destroy(&mem->mutex);
     pthread_mutexattr_destroy(&mem->attr);
