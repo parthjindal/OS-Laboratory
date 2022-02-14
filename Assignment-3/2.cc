@@ -15,6 +15,11 @@ using namespace std;
 #define SLEEP_TIME 3001
 #define MAX_JOBS 2
 
+// todo 
+// - Also print pid along with worker information 
+// - check how lock is breaking 
+// - finally format code 
+
 struct Job
 {
     int producer_num;
@@ -187,7 +192,7 @@ void producer(SharedMem *mem, int producer_num)
             assert(insert_job(queue, job) == true);
             cout << "\nNEW JOB GENERATED" << endl;
             cout << "Job Inserted by Producer" << endl;
-            cout << job;
+            cout << job << endl;
             pthread_mutex_unlock(&mem->mutex);
         }
         else
@@ -258,8 +263,8 @@ void worker(SharedMem *mem, int worker_num)
                 // cout << getpid() << " Worker " << worker_num << " started job: " << endl;
                 if (mem->queue.job_queue[mem->queue.front].status != 1)
                 {
-                    // cout << getpid() << " " << mem->queue.job_queue[mem->queue.front].status << "--------" << endl;
-                    // cout << getpid() << " " << mem->queue.front << "--------" << endl;
+                    cout << getpid() << " " << mem->queue.job_queue[mem->queue.front].status << "--------" << endl;
+                    cout << getpid() << " " << mem->queue.front << "--------" << endl;
                     exit(1);
                 }
                 mem->queue.workidx = mem->queue.rear;
@@ -277,7 +282,7 @@ void worker(SharedMem *mem, int worker_num)
                 }
                 cout << "\nNEW JOB GENERATED" << endl;
                 cout << "Job Inserted by Worker" << endl;
-                cout << mem->queue.job_queue[mem->queue.workidx];
+                cout << mem->queue.job_queue[mem->queue.workidx] << endl;
             }
 
             int front = mem->queue.front;
@@ -401,8 +406,6 @@ int main()
     cin >> num_workers;
     cout << "Enter number of producers: ";
     cin >> num_producers;
-
-    cout << endl;
 
     vector<pid_t> prcs;
     for (int i = 1; i <= num_producers; i++)
