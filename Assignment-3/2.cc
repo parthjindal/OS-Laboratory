@@ -238,6 +238,10 @@ void worker(SharedMem *mem, int worker_num) {
                 mem->queue.num_jobs++;
                 mem->queue.job_queue[mem->queue.workidx].status = 0;
                 mem->queue.job_queue[mem->queue.workidx].producer_num = worker_num;
+                if (mem->queue.job_queue[mem->queue.workidx].mat_id == 0) {
+                    mem->queue.job_queue[mem->queue.workidx].mat_id = -(rand() % 1000000 + 1);
+                }
+                mem->queue.job_queue[mem->queue.workidx].mat_size = MAT_SIZE * MAT_SIZE;
 
                 for (int i = 0; i < MAT_SIZE; i++) {
                     for (int j = 0; j < MAT_SIZE; j++) {
@@ -353,7 +357,7 @@ int main() {
     cout << "-----SET PARAMETERS-----" << endl;
     cout << "MATRIX DIMENTION: " << MAT_SIZE << " * " << MAT_SIZE << endl;
     cout << "MAXIMUM QUEUE SIZE: " << QUEUE_SIZE << endl;
-    cout << "MAXIMUM WAITING TIME: " << (SLEEP_TIME-1) << " microseconds" << endl;
+    cout << "MAXIMUM WAITING TIME: " << (SLEEP_TIME - 1) << " microseconds" << endl;
     cout << endl;
 
     int num_workers, num_producers;
