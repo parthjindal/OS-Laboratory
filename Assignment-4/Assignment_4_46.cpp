@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdarg.h>
@@ -10,16 +11,18 @@
 
 #include <cassert>
 #include <chrono>
+#include <cstring>
 #include <iostream>
+#include <queue>
 #include <string>
 #include <thread>
 #include <vector>
-
 using namespace std;
 using namespace chrono;
 
 #define MAX_CHILD_JOBS 10
 #define MAX_NODES 500
+#define MAX_TREE_SIZE 450
 
 #include <stdio.h>
 
@@ -42,22 +45,22 @@ void initLogger(const char* logFile) {
     _logFp = logFile ? fopen(logFile, "w") : stdout;
 }
 
-#define PTHREAD_MUTEX_LOCK(mutex_p)                      \
-    do {                                                 \
-        int ret = pthread_mutex_lock(mutex_p);           \
-        if (ret != 0) {                                  \
-            ERROR("pthread_mutex_lock failed: %d", ret); \
-            exit(1);                                     \
-        }                                                \
+#define PTHREAD_MUTEX_LOCK(mutex_p)                                              \
+    do {                                                                         \
+        int ret = pthread_mutex_lock(mutex_p);                                   \
+        if (ret != 0) {                                                          \
+            ERROR("%d: pthread_mutex_lock failed: %s", __LINE__, strerror(ret)); \
+            exit(1);                                                             \
+        }                                                                        \
     } while (0)
 
-#define PTHREAD_MUTEX_UNLOCK(mutex_p)                      \
-    do {                                                   \
-        int ret = pthread_mutex_unlock(mutex_p);           \
-        if (ret != 0) {                                    \
-            ERROR("pthread_mutex_unlock failed: %d", ret); \
-            exit(1);                                       \
-        }                                                  \
+#define PTHREAD_MUTEX_UNLOCK(mutex_p)                                              \
+    do {                                                                           \
+        int ret = pthread_mutex_unlock(mutex_p);                                   \
+        if (ret != 0) {                                                            \
+            ERROR("%d: pthread_mutex_unlock failed: %d", __LINE__, strerror(ret)); \
+            exit(1);                                                               \
+        }                                                                          \
     } while (0)
 
 void log_print(FILE* fp, const char* fmt, ...) {
@@ -193,12 +196,16 @@ SharedMem* shm;
 
 int getRandomJob(int idx) {
     PTHREAD_MUTEX_LOCK(&shm->nodes[idx].mutex);
-    if (shm->nodes[idx].status != WAITING) {
+    if (shm->nodes[idx].status != WAITING || shm->nodes[idx].getNumChild() == MAX_CHILD_JOBS) {
         PTHREAD_MUTEX_UNLOCK(&shm->nodes[idx].mutex);
         return -1;
     }
+    // 1-e^(n-10)
     double prob = (double)(MAX_CHILD_JOBS - shm->nodes[idx].getNumChild()) / (MAX_CHILD_JOBS + 1);
-    if ((double)(rand()) / (RAND_MAX) < prob) {
+    double sample = (double)rand() / RAND_MAX;
+    DEBUG("prob: %f, sample: %f\n", prob, sample);
+    if (sample < prob) {
+        DEBUG("prob: %f, sample: %f\n", prob, sample);
         return idx;
     }
 
@@ -220,7 +227,7 @@ void* handleProducer(void* id) {
     std::chrono::seconds lifetime = std::chrono::seconds(rand() % (11) + 10);
     DEBUG("Producer %d of lifetime %d\n", idx, lifetime.count());
     auto start = high_resolution_clock::now();
-
+    srand(time(NULL) * idx);
     while (1) {
         auto now = high_resolution_clock::now();
         if (duration_cast<seconds>(now - start).count() > lifetime.count())
@@ -232,6 +239,10 @@ void* handleProducer(void* id) {
         Node node;
         node.parentIdx = jobIdx;
         int newJobIdx = shm->addNode(node);
+        if (newJobIdx == -1) {
+            INFO("Producer %d failed to add new job, tree full\n", idx);
+            continue;
+        }
         shm->nodes[jobIdx].addChild(newJobIdx);
         DEBUG("Producer %d added job %d\n", idx, newJobIdx);
         PTHREAD_MUTEX_UNLOCK(&shm->nodes[jobIdx].mutex);
@@ -264,6 +275,12 @@ void* handleConsumerThread(void* id) {
     int idx = *((int*)id);
     DEBUG("Consumer %d\n", idx);
     while (1) {
+        PTHREAD_MUTEX_LOCK(&shm->nodes[shm->rootIdx].mutex);
+        if (shm->nodes[shm->rootIdx].status == DONE) {
+            PTHREAD_MUTEX_UNLOCK(&shm->nodes[shm->rootIdx].mutex);
+            break;
+        }
+        PTHREAD_MUTEX_UNLOCK(&shm->nodes[shm->rootIdx].mutex);
         int jobIdx = getLeafNode(shm->rootIdx);
         if (jobIdx == -1) {
             std::this_thread::sleep_for(std::chrono::milliseconds(rand() % (10) + 1));
@@ -288,6 +305,28 @@ void sigint_handler(int signum) {
     exit(1);
 }
 
+void generateRandomTree() {
+    Node rootnode;
+    shm->addNode(rootnode);
+
+    queue<int> q;
+    q.push(shm->rootIdx);
+
+    while (!q.empty() && shm->_count < MAX_TREE_SIZE) {
+        int idx = q.front();
+        q.pop();
+
+        int numChild = rand() % (MAX_CHILD_JOBS) + 1;
+        for (int i = 0; i < numChild; i++) {
+            Node node;
+            node.parentIdx = idx;
+            int newJobIdx = shm->addNode(node);
+            shm->nodes[idx].addChild(newJobIdx);
+            q.push(newJobIdx);
+        }
+    }
+}
+
 int main() {
     shmid = shmget(IPC_PRIVATE, sizeof(SharedMem), IPC_CREAT | 0666);
     shm = (SharedMem*)shmat(shmid, NULL, 0);
@@ -299,8 +338,8 @@ int main() {
 
     int pid = fork();
     if (pid == 0) {
-        Node rootnode;
-        shm->addNode(rootnode);
+        generateRandomTree();
+
         vector<pthread_t> producerThreads;
         for (int i = 0; i < producers; i++) {
             pthread_t p;
@@ -309,6 +348,7 @@ int main() {
             pthread_create(&p, NULL, &handleProducer, (void*)id);
             producerThreads.push_back(p);
         }
+
         int bpid = fork();
         if (bpid == 0) {
             vector<pthread_t> threads;
@@ -328,7 +368,14 @@ int main() {
             pthread_join(producerThreads[i], NULL);
         }
     }
-    while (wait(NULL) > 0);
+    while (wait(NULL) > 0)
+        ;
     shmdt(shm);
     shmctl(shmid, IPC_RMID, NULL);
 }
+
+/**
+ * TODO LIST:
+ * - Create random tree initially
+ * - Add print statements
+ */
