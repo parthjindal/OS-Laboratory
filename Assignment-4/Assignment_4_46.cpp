@@ -23,7 +23,7 @@ using namespace chrono;
 
 #define MAX_CHILD_JOBS 10
 #define MAX_NODES 500
-#define MAX_TREE_SIZE 200
+#define MAX_TREE_SIZE 300
 #include <stdio.h>
 
 // https://github.com/kuroidoruido/ColorLog/blob/master/colorlog.h
@@ -37,7 +37,7 @@ void log_print(FILE*, const char*, ...);
 
 #define __LOG_COLOR(FD, CLR, CTX, TXT, args...) log_print(FD, "\033[%sm[%s] \033[0m" TXT, CLR, CTX, ##args)
 #define INFO(TXT, args...) __LOG_COLOR(stdout, _COLOR_GREEN, "info", TXT, ##args)
-#define DEBUG(TXT, args...) __LOG_COLOR(stdout, _COLOR_BLUE, "debug", TXT, ##args)
+#define DEBUG(TXT, args...) __LOG_COLOR(stderr, _COLOR_BLUE, "debug", TXT, ##args)
 #define ERROR(TXT, args...) __LOG_COLOR(stderr, _COLOR_RED, "error", TXT, ##args)
 
 FILE* _logFp = NULL;
@@ -192,12 +192,13 @@ struct SharedMem {
         }
         rootIdx = -1;
     }
-
+    // solution 1 to chopstick issue here: try_lock if held continue else try to acquire lock
     int addNode(Node& node) {
         PTHREAD_MUTEX_LOCK(&mutex);
         if (_count < MAX_NODES) {
             for (int i = 0; i < MAX_NODES; i++) {
-                // PTHREAD_MUTEX_LOCK(&nodes[i].mutex);  // FIXME: // producer locking a lock already locked by itself
+                if (i == node.parentIdx)
+                    continue;
                 if (nodes[i].status == DONE) {
                     PTHREAD_MUTEX_LOCK(&nodes[i].mutex);
                     nodes[i] = node;
@@ -206,10 +207,8 @@ struct SharedMem {
                     if (rootIdx == -1)
                         rootIdx = i;
                     PTHREAD_MUTEX_UNLOCK(&mutex);
-                    // PTHREAD_MUTEX_UNLOCK(&nodes[i].mutex);
                     return i;
                 }
-                // PTHREAD_MUTEX_UNLOCK(&nodes[i].mutex);
             }
         }
         PTHREAD_MUTEX_UNLOCK(&mutex);
@@ -217,20 +216,24 @@ struct SharedMem {
     }
 
     int removeNode(int idx) {
+        // EMPTY MEMORY IN NODE QUEUE
         PTHREAD_MUTEX_LOCK(&mutex);  // TODO: CHECK if more locking is needed here
+        int parentIdx = nodes[idx].parentIdx;
         nodes[idx].status = DONE;
         _count--;
-        if (idx == rootIdx) {
-            INFO("Removing ROOT node\n");
-            PTHREAD_MUTEX_UNLOCK(&mutex);
-            return 0;
-        }
         PTHREAD_MUTEX_UNLOCK(&mutex);
 
-        int parentIdx = nodes[idx].parentIdx;
+        if (parentIdx == -1) {
+            INFO("Removing ROOT node\n");
+            return 0;
+        }
+
         PTHREAD_MUTEX_LOCK(&nodes[parentIdx].mutex);
-        // DEBUG("Removing node edge of: %d from parent: %d\n", idx, parentIdx);
-        nodes[parentIdx].removeChild(idx);
+        if (nodes[parentIdx].removeChild(idx) == -1) {
+            ERROR("Failed to remove child node: %d from parent: %d\n", idx, parentIdx);
+            PTHREAD_MUTEX_UNLOCK(&nodes[parentIdx].mutex);
+            return -1;
+        }
         PTHREAD_MUTEX_UNLOCK(&nodes[parentIdx].mutex);
 
         return 0;
@@ -282,23 +285,23 @@ void* handleProducer(void* id) {
             break;
         int jobIdx = getRandomJob(shm->rootIdx);
         if (jobIdx == -1) {
-            // DEBUG("Producer %d waiting for job\n", idx);
             std::this_thread::sleep_for(std::chrono::microseconds(10));
             continue;
         }
         Node node;
         node.parentIdx = jobIdx;
-        int newJobIdx = shm->addNode(node); // FIXME: new node should be locked until a connection is established with parent node ???????
+        int newJobIdx = shm->addNode(node);  // FIXME: new node should be locked until a connection is established with parent node ???????
         if (newJobIdx == -1) {
             // ERROR("PRODUCER %d failed to add new job, tree full\n", idx);
+            // todo: can add semaphore here
             PTHREAD_MUTEX_UNLOCK(&shm->nodes[jobIdx].mutex);  // UNLOCK PARENT NODE
+            std::this_thread::sleep_for(std::chrono::microseconds(10));
             continue;
         }
         shm->nodes[jobIdx].addChild(newJobIdx);
         DEBUG("PRODUCER %d -> Job: %d, Parent Job: %d\n", idx, newJobIdx, jobIdx);
         PTHREAD_MUTEX_UNLOCK(&shm->nodes[jobIdx].mutex);  // UNLOCK PARENT NODE
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(rand() % (250) + 1));
+        std::this_thread::sleep_for(std::chrono::milliseconds(rand() % (500) + 1));
     }
 
     INFO("PRODUCER %d done at %ld\n", idx, time(NULL));
@@ -306,6 +309,7 @@ void* handleProducer(void* id) {
 }
 
 int getLeafNode(int idx) {
+    // DEBUG("pid: %d, idx: %d\n", getpid(), idx);
     PTHREAD_MUTEX_LOCK(&shm->nodes[idx].mutex);
     if (shm->nodes[idx].isLeaf() && shm->nodes[idx].status == WAITING) {
         return idx;
@@ -340,6 +344,7 @@ void* handleConsumerThread(void* id) {
             continue;
             // break;  // TODO: CHECK IF THIS IS OK !!!
         }
+        // DEBUG("Consumer %d STARTING -> Job: %d\n", idx, jobIdx);
         shm->nodes[jobIdx].status = ONGOING;
         int parentIdx = shm->nodes[jobIdx].parentIdx;
         PTHREAD_MUTEX_UNLOCK(&shm->nodes[jobIdx].mutex);
@@ -358,10 +363,26 @@ void sigint_handler(int signum) {
     exit(1);
 }
 
+void printTree() {
+    queue<int> q;
+    q.push(shm->rootIdx);
+    while (!q.empty()) {
+        int idx = q.front();
+        q.pop();
+        printf("\n%d: ", idx);
+        for (int i = 0; i < MAX_CHILD_JOBS; i++) {
+            int childIdx = shm->nodes[idx].childJobs[i];
+            if (childIdx != -1) {
+                printf("%d ", childIdx);
+                q.push(childIdx);
+            }
+        }
+    }
+}
+
 void generateRandomTree() {
     Node rootnode;
     shm->addNode(rootnode);
-
     queue<int> q;
     q.push(shm->rootIdx);
 
@@ -384,6 +405,7 @@ void generateRandomTree() {
             q.push(newJobIdx);
         }
     }
+    printTree();
 }
 
 int main() {
