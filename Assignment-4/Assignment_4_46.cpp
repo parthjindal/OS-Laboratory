@@ -11,6 +11,7 @@
 
 #include <cassert>
 #include <chrono>
+#include <cmath>
 #include <cstring>
 #include <iostream>
 #include <queue>
@@ -22,7 +23,7 @@ using namespace chrono;
 
 #define MAX_CHILD_JOBS 10
 #define MAX_NODES 500
-#define MAX_TREE_SIZE 450
+#define MAX_TREE_SIZE 300
 
 #include <stdio.h>
 
@@ -200,19 +201,19 @@ int getRandomJob(int idx) {
         PTHREAD_MUTEX_UNLOCK(&shm->nodes[idx].mutex);
         return -1;
     }
-    // 1-e^(n-10)
-    double prob = (double)(MAX_CHILD_JOBS - shm->nodes[idx].getNumChild()) / (MAX_CHILD_JOBS + 1);
+    double prob = (double)(1 - exp((double)(shm->nodes[idx].getNumChild() - 10)));
+    prob = 0.5;
     double sample = (double)rand() / RAND_MAX;
-    DEBUG("prob: %f, sample: %f\n", prob, sample);
+    DEBUG("prob: %f, sample: %f, id: %d\n", prob, sample, idx);
     if (sample < prob) {
-        DEBUG("prob: %f, sample: %f\n", prob, sample);
+        DEBUG("prob: %f, sample: %f, num childs: %d\n", prob, sample, shm->nodes[idx].getNumChild());
         return idx;
     }
-
     PTHREAD_MUTEX_UNLOCK(&shm->nodes[idx].mutex);
     for (int i = 0; i < MAX_CHILD_JOBS; i++) {
         int childIdx = shm->nodes[idx].childJobs[i];
         if (childIdx != -1) {
+            DEBUG("Calling getRandomJob for child %d\n", childIdx);
             int ret = getRandomJob(childIdx);
             if (ret != -1) {
                 return ret;
@@ -225,7 +226,7 @@ int getRandomJob(int idx) {
 void* handleProducer(void* id) {
     int idx = *((int*)id);
     std::chrono::seconds lifetime = std::chrono::seconds(rand() % (11) + 10);
-    DEBUG("Producer %d of lifetime %d\n", idx, lifetime.count());
+    INFO("Producer %d of lifetime %d, time: %ld\n", idx, lifetime.count(), time(NULL));
     auto start = high_resolution_clock::now();
     srand(time(NULL) * idx);
     while (1) {
@@ -249,7 +250,7 @@ void* handleProducer(void* id) {
         std::this_thread::sleep_for(std::chrono::milliseconds(rand() % (250) + 1));
     }
 
-    DEBUG("Producer %d done\n", idx);
+    INFO("Producer %d done at %ld\n", idx, time(NULL));
     pthread_exit(NULL);
 }
 
@@ -274,6 +275,7 @@ int getLeafNode(int idx) {
 void* handleConsumerThread(void* id) {
     int idx = *((int*)id);
     DEBUG("Consumer %d\n", idx);
+    srand(time(NULL) * idx);
     while (1) {
         PTHREAD_MUTEX_LOCK(&shm->nodes[shm->rootIdx].mutex);
         if (shm->nodes[shm->rootIdx].status == DONE) {
@@ -312,11 +314,17 @@ void generateRandomTree() {
     queue<int> q;
     q.push(shm->rootIdx);
 
-    while (!q.empty() && shm->_count < MAX_TREE_SIZE) {
+    int numNodes = rand() % (MAX_NODES - MAX_TREE_SIZE) + MAX_TREE_SIZE;
+    DEBUG ("Creating tree of %d nodes\n", numNodes);
+
+    while (!q.empty() && shm->_count < numNodes) {
         int idx = q.front();
         q.pop();
 
         int numChild = rand() % (MAX_CHILD_JOBS) + 1;
+        if (shm->_count + numChild > numNodes) {
+            numChild = numNodes - shm->_count;
+        }
         for (int i = 0; i < numChild; i++) {
             Node node;
             node.parentIdx = idx;
