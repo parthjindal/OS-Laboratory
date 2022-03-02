@@ -23,8 +23,7 @@ using namespace chrono;
 
 #define MAX_CHILD_JOBS 10
 #define MAX_NODES 500
-#define MAX_TREE_SIZE 300
-
+#define MAX_TREE_SIZE 200
 #include <stdio.h>
 
 // https://github.com/kuroidoruido/ColorLog/blob/master/colorlog.h
@@ -79,8 +78,10 @@ enum JobStatus {
     ONGOING,
     DONE
 };
+// TODO: should we have a random no. generator as a global ?
 
-struct Node {
+class Node {
+   public:
     int jobId;
     std::chrono::milliseconds time2comp;
 
@@ -105,6 +106,38 @@ struct Node {
         pthread_mutex_init(&mutex, &attr);
         numChildActive = 0;
         parentIdx = -1;
+    }
+
+    ~Node() {
+        pthread_mutex_destroy(&mutex);
+        pthread_mutexattr_destroy(&attr);
+    }
+
+    void init() {
+        jobId = rand() % ((int)1e8) + 1;
+        time2comp = std::chrono::milliseconds(rand() % 250 + 1);
+        for (int i = 0; i < MAX_CHILD_JOBS; i++) {
+            childJobs[i] = -1;
+        }
+        status = WAITING;
+        pthread_mutexattr_init(&attr);
+        pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_ERRORCHECK_NP);
+        pthread_mutexattr_setpshared(&attr, PTHREAD_PROCESS_SHARED);
+        pthread_mutex_init(&mutex, &attr);
+        numChildActive = 0;
+        parentIdx = -1;
+    }
+
+    Node& operator=(const Node& node) {
+        jobId = node.jobId;
+        time2comp = node.time2comp;
+        for (int i = 0; i < MAX_CHILD_JOBS; i++) {
+            childJobs[i] = node.childJobs[i];
+        }
+        status = node.status;
+        numChildActive = node.numChildActive;
+        parentIdx = node.parentIdx;
+        return *this;
     }
 
     int addChild(int childJobIdx) {
@@ -154,6 +187,7 @@ struct SharedMem {
         pthread_mutex_init(&mutex, &attr);
         _count = 0;
         for (int i = 0; i < MAX_NODES; i++) {
+            nodes[i].init();
             nodes[i].status = DONE;
         }
         rootIdx = -1;
@@ -163,14 +197,19 @@ struct SharedMem {
         PTHREAD_MUTEX_LOCK(&mutex);
         if (_count < MAX_NODES) {
             for (int i = 0; i < MAX_NODES; i++) {
+                // PTHREAD_MUTEX_LOCK(&nodes[i].mutex);  // FIXME: // producer locking a lock already locked by itself
                 if (nodes[i].status == DONE) {
+                    PTHREAD_MUTEX_LOCK(&nodes[i].mutex);
                     nodes[i] = node;
+                    PTHREAD_MUTEX_UNLOCK(&nodes[i].mutex);
                     _count++;
-                    PTHREAD_MUTEX_UNLOCK(&mutex);
                     if (rootIdx == -1)
                         rootIdx = i;
+                    PTHREAD_MUTEX_UNLOCK(&mutex);
+                    // PTHREAD_MUTEX_UNLOCK(&nodes[i].mutex);
                     return i;
                 }
+                // PTHREAD_MUTEX_UNLOCK(&nodes[i].mutex);
             }
         }
         PTHREAD_MUTEX_UNLOCK(&mutex);
@@ -178,17 +217,22 @@ struct SharedMem {
     }
 
     int removeNode(int idx) {
+        PTHREAD_MUTEX_LOCK(&mutex);  // TODO: CHECK if more locking is needed here
         nodes[idx].status = DONE;
         _count--;
         if (idx == rootIdx) {
-            DEBUG("remove root node\n");
+            INFO("Removing ROOT node\n");
+            PTHREAD_MUTEX_UNLOCK(&mutex);
             return 0;
         }
+        PTHREAD_MUTEX_UNLOCK(&mutex);
+
         int parentIdx = nodes[idx].parentIdx;
         PTHREAD_MUTEX_LOCK(&nodes[parentIdx].mutex);
-        DEBUG("remove node %d from parent %d\n", idx, parentIdx);
+        // DEBUG("Removing node edge of: %d from parent: %d\n", idx, parentIdx);
         nodes[parentIdx].removeChild(idx);
         PTHREAD_MUTEX_UNLOCK(&nodes[parentIdx].mutex);
+
         return 0;
     }
 };
@@ -197,23 +241,25 @@ SharedMem* shm;
 
 int getRandomJob(int idx) {
     PTHREAD_MUTEX_LOCK(&shm->nodes[idx].mutex);
-    if (shm->nodes[idx].status != WAITING || shm->nodes[idx].getNumChild() == MAX_CHILD_JOBS) {
+    if (shm->nodes[idx].status != WAITING) {
+        // DEBUG("Node %d's status: %d, childjobs: %d\n", idx, shm->nodes[idx].status, shm->nodes[idx].getNumChild());
         PTHREAD_MUTEX_UNLOCK(&shm->nodes[idx].mutex);
         return -1;
     }
     double prob = (double)(1 - exp((double)(shm->nodes[idx].getNumChild() - 10)));
-    prob = 0.5;
+    prob = 0.3;
     double sample = (double)rand() / RAND_MAX;
-    DEBUG("prob: %f, sample: %f, id: %d\n", prob, sample, idx);
-    if (sample < prob) {
-        DEBUG("prob: %f, sample: %f, num childs: %d\n", prob, sample, shm->nodes[idx].getNumChild());
+    // DEBUG("prob: %f, sample: %f, id: %d\n", prob, sample, idx);
+
+    if (sample < prob && shm->nodes[idx].getNumChild() < MAX_CHILD_JOBS) {
+        // DEBUG("prob: %f, sample: %f, num childs: %d\n", prob, sample, shm->nodes[idx].getNumChild());
         return idx;
     }
     PTHREAD_MUTEX_UNLOCK(&shm->nodes[idx].mutex);
     for (int i = 0; i < MAX_CHILD_JOBS; i++) {
         int childIdx = shm->nodes[idx].childJobs[i];
         if (childIdx != -1) {
-            DEBUG("Calling getRandomJob for child %d\n", childIdx);
+            // DEBUG("Calling getRandomJob for child %d\n", childIdx);
             int ret = getRandomJob(childIdx);
             if (ret != -1) {
                 return ret;
@@ -229,28 +275,33 @@ void* handleProducer(void* id) {
     INFO("Producer %d of lifetime %d, time: %ld\n", idx, lifetime.count(), time(NULL));
     auto start = high_resolution_clock::now();
     srand(time(NULL) * idx);
+
     while (1) {
         auto now = high_resolution_clock::now();
-        if (duration_cast<seconds>(now - start).count() > lifetime.count())
+        if (duration_cast<seconds>(now - start).count() >= lifetime.count())
             break;
         int jobIdx = getRandomJob(shm->rootIdx);
-        if (jobIdx == -1)
+        if (jobIdx == -1) {
+            // DEBUG("Producer %d waiting for job\n", idx);
+            std::this_thread::sleep_for(std::chrono::microseconds(10));
             continue;
-        DEBUG("Producer %d adding newjob to job %d\n", idx, jobIdx);
+        }
         Node node;
         node.parentIdx = jobIdx;
-        int newJobIdx = shm->addNode(node);
+        int newJobIdx = shm->addNode(node); // FIXME: new node should be locked until a connection is established with parent node ???????
         if (newJobIdx == -1) {
-            INFO("Producer %d failed to add new job, tree full\n", idx);
+            // ERROR("PRODUCER %d failed to add new job, tree full\n", idx);
+            PTHREAD_MUTEX_UNLOCK(&shm->nodes[jobIdx].mutex);  // UNLOCK PARENT NODE
             continue;
         }
         shm->nodes[jobIdx].addChild(newJobIdx);
-        DEBUG("Producer %d added job %d\n", idx, newJobIdx);
-        PTHREAD_MUTEX_UNLOCK(&shm->nodes[jobIdx].mutex);
+        DEBUG("PRODUCER %d -> Job: %d, Parent Job: %d\n", idx, newJobIdx, jobIdx);
+        PTHREAD_MUTEX_UNLOCK(&shm->nodes[jobIdx].mutex);  // UNLOCK PARENT NODE
+
         std::this_thread::sleep_for(std::chrono::milliseconds(rand() % (250) + 1));
     }
 
-    INFO("Producer %d done at %ld\n", idx, time(NULL));
+    INFO("PRODUCER %d done at %ld\n", idx, time(NULL));
     pthread_exit(NULL);
 }
 
@@ -275,7 +326,7 @@ int getLeafNode(int idx) {
 void* handleConsumerThread(void* id) {
     int idx = *((int*)id);
     DEBUG("Consumer %d\n", idx);
-    srand(time(NULL) * idx);
+    srand(time(NULL) + idx);
     while (1) {
         PTHREAD_MUTEX_LOCK(&shm->nodes[shm->rootIdx].mutex);
         if (shm->nodes[shm->rootIdx].status == DONE) {
@@ -285,18 +336,18 @@ void* handleConsumerThread(void* id) {
         PTHREAD_MUTEX_UNLOCK(&shm->nodes[shm->rootIdx].mutex);
         int jobIdx = getLeafNode(shm->rootIdx);
         if (jobIdx == -1) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(rand() % (10) + 1));
+            std::this_thread::sleep_for(std::chrono::microseconds(rand() % (10) + 1));
             continue;
             // break;  // TODO: CHECK IF THIS IS OK !!!
         }
-        DEBUG("Consumer %d got job %d\n", idx, jobIdx);
         shm->nodes[jobIdx].status = ONGOING;
+        int parentIdx = shm->nodes[jobIdx].parentIdx;
         PTHREAD_MUTEX_UNLOCK(&shm->nodes[jobIdx].mutex);
         std::this_thread::sleep_for(shm->nodes[jobIdx].time2comp);
         shm->removeNode(jobIdx);
-        DEBUG("Consumer %d removed job %d\n", idx, jobIdx);
+        DEBUG("CONSUMER %d -> Job: %d, Parent Job: %d\n", idx, jobIdx, parentIdx);
     }
-    DEBUG("Consumer %d done\n", idx);
+    DEBUG("CONSUMER %d done\n", idx);
     pthread_exit(NULL);
 }
 
@@ -315,7 +366,7 @@ void generateRandomTree() {
     q.push(shm->rootIdx);
 
     int numNodes = rand() % (MAX_NODES - MAX_TREE_SIZE) + MAX_TREE_SIZE;
-    DEBUG ("Creating tree of %d nodes\n", numNodes);
+    DEBUG("Creating tree of %d nodes\n", numNodes);
 
     while (!q.empty() && shm->_count < numNodes) {
         int idx = q.front();
