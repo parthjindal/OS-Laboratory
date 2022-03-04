@@ -18,25 +18,35 @@
 #include <string>
 #include <thread>
 #include <vector>
+
 using namespace std;
 using namespace chrono;
 
 #define MAX_CHILD_JOBS 10
-#define MAX_NODES 500
-#define MAX_TREE_SIZE 300
+#define MIN_LIFETIME 10
+#define MAX_LIFETIME 20
+#define MIN_TREE_SIZE 300
+#define MAX_TREE_SIZE 500
+#define MIN_SLEEP_TIME 200
+#define MAX_SLEEP_TIME 500
+#define MAX_JOB_TIME 250
+#define MAX_JOB_ID (int)(1e8)
+
 #include <stdio.h>
 
 // https://github.com/kuroidoruido/ColorLog/blob/master/colorlog.h
 #define _COLOR_RED "1;31"
 #define _COLOR_BLUE "1;34"
 #define _COLOR_GREEN "0;32"
+#define _COLOR_YELLOW "1;33"
 
 extern FILE* _logFp;
 void initLogger(const char*);
 void log_print(FILE*, const char*, ...);
 
 #define __LOG_COLOR(FD, CLR, CTX, TXT, args...) log_print(FD, "\033[%sm[%s] \033[0m" TXT, CLR, CTX, ##args)
-#define INFO(TXT, args...) __LOG_COLOR(stdout, _COLOR_GREEN, "info", TXT, ##args)
+#define LOG(CTX, COLOR, TXT, args...) __LOG_COLOR(stderr, COLOR, CTX, TXT, ##args)
+#define INFO(TXT, args...) __LOG_COLOR(stderr, _COLOR_GREEN, "info", TXT, ##args)
 #define DEBUG(TXT, args...) __LOG_COLOR(stderr, _COLOR_BLUE, "debug", TXT, ##args)
 #define ERROR(TXT, args...) __LOG_COLOR(stderr, _COLOR_RED, "error", TXT, ##args)
 
@@ -94,16 +104,12 @@ class Node {
     pthread_mutexattr_t attr;
 
     Node() {
-        jobId = rand() % ((int)1e8) + 1;
-        time2comp = std::chrono::milliseconds(rand() % 250 + 1);
+        jobId = rand() % MAX_JOB_ID + 1;
+        time2comp = std::chrono::milliseconds(rand() % MAX_JOB_TIME + 1);
         for (int i = 0; i < MAX_CHILD_JOBS; i++) {
             childJobs[i] = -1;
         }
         status = WAITING;
-        pthread_mutexattr_init(&attr);
-        pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_ERRORCHECK_NP);
-        pthread_mutexattr_setpshared(&attr, PTHREAD_PROCESS_SHARED);
-        pthread_mutex_init(&mutex, &attr);
         numChildActive = 0;
         parentIdx = -1;
     }
@@ -114,8 +120,8 @@ class Node {
     }
 
     void init() {
-        jobId = rand() % ((int)1e8) + 1;
-        time2comp = std::chrono::milliseconds(rand() % 250 + 1);
+        jobId = rand() % MAX_JOB_ID + 1;
+        time2comp = std::chrono::milliseconds(rand() % MAX_JOB_TIME + 1);
         for (int i = 0; i < MAX_CHILD_JOBS; i++) {
             childJobs[i] = -1;
         }
@@ -174,7 +180,8 @@ class Node {
 };
 
 struct SharedMem {
-    Node nodes[MAX_NODES];
+    int size;
+    Node* nodes;
     pthread_mutex_t mutex;
     pthread_mutexattr_t attr;
     int _count;
@@ -186,7 +193,7 @@ struct SharedMem {
         pthread_mutexattr_setpshared(&attr, PTHREAD_PROCESS_SHARED);
         pthread_mutex_init(&mutex, &attr);
         _count = 0;
-        for (int i = 0; i < MAX_NODES; i++) {
+        for (int i = 0; i < size; i++) {
             nodes[i].init();
             nodes[i].status = DONE;
         }
@@ -195,8 +202,8 @@ struct SharedMem {
     // solution 1 to chopstick issue here: try_lock if held continue else try to acquire lock
     int addNode(Node& node) {
         PTHREAD_MUTEX_LOCK(&mutex);
-        if (_count < MAX_NODES) {
-            for (int i = 0; i < MAX_NODES; i++) {
+        if (_count < size) {
+            for (int i = 0; i < size; i++) {
                 if (i == node.parentIdx)
                     continue;
                 if (nodes[i].status == DONE) {
@@ -218,13 +225,17 @@ struct SharedMem {
     int removeNode(int idx) {
         // EMPTY MEMORY IN NODE QUEUE
         PTHREAD_MUTEX_LOCK(&mutex);  // TODO: CHECK if more locking is needed here
+
+        PTHREAD_MUTEX_LOCK(&nodes[idx].mutex);
         int parentIdx = nodes[idx].parentIdx;
         nodes[idx].status = DONE;
+        PTHREAD_MUTEX_UNLOCK(&nodes[idx].mutex);
+
         _count--;
         PTHREAD_MUTEX_UNLOCK(&mutex);
 
         if (parentIdx == -1) {
-            INFO("Removing ROOT node\n");
+            LOG("Consumer", _COLOR_BLUE, "Removing ROOT node\n");
             return 0;
         }
 
@@ -249,8 +260,7 @@ int getRandomJob(int idx) {
         PTHREAD_MUTEX_UNLOCK(&shm->nodes[idx].mutex);
         return -1;
     }
-    double prob = (double)(1 - exp((double)(shm->nodes[idx].getNumChild() - 10)));
-    prob = 0.3;
+    double prob = 0.3;
     double sample = (double)rand() / RAND_MAX;
     // DEBUG("prob: %f, sample: %f, id: %d\n", prob, sample, idx);
 
@@ -274,8 +284,8 @@ int getRandomJob(int idx) {
 
 void* handleProducer(void* id) {
     int idx = *((int*)id);
-    std::chrono::seconds lifetime = std::chrono::seconds(rand() % (11) + 10);
-    INFO("Producer %d of lifetime %d, time: %ld\n", idx, lifetime.count(), time(NULL));
+    std::chrono::seconds lifetime = std::chrono::seconds(rand() % (MAX_LIFETIME - MIN_LIFETIME + 1) + MIN_LIFETIME);
+    LOG("Producer", _COLOR_YELLOW, "ID: %d lifetime %ds starts at %d\n", idx, lifetime.count(), time(NULL));
     auto start = high_resolution_clock::now();
     srand(time(NULL) * idx);
 
@@ -284,7 +294,9 @@ void* handleProducer(void* id) {
         if (duration_cast<seconds>(now - start).count() >= lifetime.count())
             break;
         int jobIdx = getRandomJob(shm->rootIdx);
+        // LOG("Producer", _COLOR_YELLOW, "ID: %d FOUND PARENT jobIdx: %d\n", idx, jobIdx);
         if (jobIdx == -1) {
+            // DEBUG("Producer %d: No job available\n", idx);
             std::this_thread::sleep_for(std::chrono::microseconds(10));
             continue;
         }
@@ -292,24 +304,22 @@ void* handleProducer(void* id) {
         node.parentIdx = jobIdx;
         int newJobIdx = shm->addNode(node);  // FIXME: new node should be locked until a connection is established with parent node ???????
         if (newJobIdx == -1) {
-            // ERROR("PRODUCER %d failed to add new job, tree full\n", idx);
+            ERROR("PRODUCER %d failed to add new job, tree full\n", idx);
             // todo: can add semaphore here
             PTHREAD_MUTEX_UNLOCK(&shm->nodes[jobIdx].mutex);  // UNLOCK PARENT NODE
             std::this_thread::sleep_for(std::chrono::microseconds(10));
             continue;
         }
-        shm->nodes[jobIdx].addChild(newJobIdx);
-        DEBUG("PRODUCER %d -> Job: %d, Parent Job: %d\n", idx, newJobIdx, jobIdx);
+        assert(shm->nodes[jobIdx].addChild(newJobIdx) == 0);
+        LOG("Producer", _COLOR_YELLOW, "Added Job: %d(%d), ParentJob: %d(%d)\n", shm->nodes[newJobIdx].jobId, newJobIdx, shm->nodes[jobIdx].jobId, jobIdx);
         PTHREAD_MUTEX_UNLOCK(&shm->nodes[jobIdx].mutex);  // UNLOCK PARENT NODE
-        std::this_thread::sleep_for(std::chrono::milliseconds(rand() % (500) + 1));
+        std::this_thread::sleep_for(std::chrono::milliseconds(rand() % (MAX_SLEEP_TIME - MIN_SLEEP_TIME + 1) + MIN_SLEEP_TIME));
     }
-
-    INFO("PRODUCER %d done at %ld\n", idx, time(NULL));
+    LOG("Producer", _COLOR_YELLOW, "ID: %d lifetime %ds ends at %d\n", idx, lifetime.count(), time(NULL));
     pthread_exit(NULL);
 }
 
 int getLeafNode(int idx) {
-    // DEBUG("pid: %d, idx: %d\n", getpid(), idx);
     PTHREAD_MUTEX_LOCK(&shm->nodes[idx].mutex);
     if (shm->nodes[idx].isLeaf() && shm->nodes[idx].status == WAITING) {
         return idx;
@@ -329,11 +339,11 @@ int getLeafNode(int idx) {
 
 void* handleConsumerThread(void* id) {
     int idx = *((int*)id);
-    DEBUG("Consumer %d\n", idx);
     srand(time(NULL) + idx);
     while (1) {
         PTHREAD_MUTEX_LOCK(&shm->nodes[shm->rootIdx].mutex);
-        if (shm->nodes[shm->rootIdx].status == DONE) {
+        if (shm->nodes[shm->rootIdx].status != WAITING) {
+            // LOG("Consumer", _COLOR_YELLOW, "ID: %d, root node is done\n", idx);
             PTHREAD_MUTEX_UNLOCK(&shm->nodes[shm->rootIdx].mutex);
             break;
         }
@@ -342,23 +352,30 @@ void* handleConsumerThread(void* id) {
         if (jobIdx == -1) {
             std::this_thread::sleep_for(std::chrono::microseconds(rand() % (10) + 1));
             continue;
-            // break;  // TODO: CHECK IF THIS IS OK !!!
         }
-        // DEBUG("Consumer %d STARTING -> Job: %d\n", idx, jobIdx);
         shm->nodes[jobIdx].status = ONGOING;
         int parentIdx = shm->nodes[jobIdx].parentIdx;
+        if (parentIdx != -1)
+            LOG("Consumer", _COLOR_BLUE, "Starting Job: %d(%d), ParentJob: %d(%d)\n", shm->nodes[jobIdx].jobId, jobIdx, shm->nodes[parentIdx].jobId, parentIdx);
+        else
+            LOG("Consumer", _COLOR_BLUE, "Starting Job: %d(%d)\n", shm->nodes[jobIdx].jobId, jobIdx);
         PTHREAD_MUTEX_UNLOCK(&shm->nodes[jobIdx].mutex);
         std::this_thread::sleep_for(shm->nodes[jobIdx].time2comp);
+        if (parentIdx != -1)
+            LOG("Consumer", _COLOR_BLUE, "Finished Job: %d(%d), ParentJob: %d(%d)\n", shm->nodes[jobIdx].jobId, jobIdx, shm->nodes[parentIdx].jobId, parentIdx);
+        else
+            LOG("Consumer", _COLOR_BLUE, "Finished Job: %d(%d)\n", shm->nodes[jobIdx].jobId, jobIdx);
         shm->removeNode(jobIdx);
-        DEBUG("CONSUMER %d -> Job: %d, Parent Job: %d\n", idx, jobIdx, parentIdx);
     }
-    DEBUG("CONSUMER %d done\n", idx);
+    LOG("Consumer", _COLOR_BLUE, "Consumer %d done\n", idx);
     pthread_exit(NULL);
 }
 
-int shmid;
+int shmid, shmid2;
 void sigint_handler(int signum) {
+    shmdt(shm->nodes);
     shmdt(shm);
+    shmctl(shmid2, IPC_RMID, NULL);
     shmctl(shmid, IPC_RMID, NULL);
     exit(1);
 }
@@ -369,7 +386,8 @@ void printTree() {
     while (!q.empty()) {
         int idx = q.front();
         q.pop();
-        printf("\n%d: ", idx);
+        if (shm->nodes[idx].numChildActive > 0)
+            printf("\n%d: ", idx);
         for (int i = 0; i < MAX_CHILD_JOBS; i++) {
             int childIdx = shm->nodes[idx].childJobs[i];
             if (childIdx != -1) {
@@ -380,23 +398,18 @@ void printTree() {
     }
 }
 
-void generateRandomTree() {
+void generateRandomTree(int numNodes) {
     Node rootnode;
     shm->addNode(rootnode);
     queue<int> q;
     q.push(shm->rootIdx);
 
-    int numNodes = rand() % (MAX_NODES - MAX_TREE_SIZE) + MAX_TREE_SIZE;
-    DEBUG("Creating tree of %d nodes\n", numNodes);
-
     while (!q.empty() && shm->_count < numNodes) {
         int idx = q.front();
         q.pop();
-
         int numChild = rand() % (MAX_CHILD_JOBS) + 1;
-        if (shm->_count + numChild > numNodes) {
+        if (shm->_count + numChild > numNodes)
             numChild = numNodes - shm->_count;
-        }
         for (int i = 0; i < numChild; i++) {
             Node node;
             node.parentIdx = idx;
@@ -405,26 +418,42 @@ void generateRandomTree() {
             q.push(newJobIdx);
         }
     }
+    cout << "Tree:";
     printTree();
+    cout << "\n";
 }
 
 int main() {
-    shmid = shmget(IPC_PRIVATE, sizeof(SharedMem), IPC_CREAT | 0666);
-    shm = (SharedMem*)shmat(shmid, NULL, 0);
-    shm->init();
     srand(time(NULL));
     int producers, consumers;
-    cin >> producers >> consumers;
+    cout << "Enter number of producers: ";
+    cin >> producers;
+    cout << "Enter number of consumers: ";
+    cin >> consumers;
+
+    int init_size = rand() % (MAX_TREE_SIZE - MIN_TREE_SIZE + 1) + MIN_TREE_SIZE;
+    int final_size = init_size + producers * (1000 / MIN_SLEEP_TIME) * (MAX_LIFETIME);
+
+    cout << "Creating shared memory for " << final_size << " nodes\n";
+    shmid = shmget(IPC_PRIVATE, sizeof(SharedMem), IPC_CREAT | 0666);
+    shm = (SharedMem*)shmat(shmid, NULL, 0);
+
+    key_t key = ftok(".", 'a');
+    shmid2 = shmget(key, sizeof(Node) * final_size, IPC_CREAT | 0666);
+    shm->nodes = (Node*)shmat(shmid2, NULL, 0);
+    shm->size = final_size;
+
     signal(SIGINT, sigint_handler);
+
+    shm->init();
 
     int pid = fork();
     if (pid == 0) {
-        generateRandomTree();
-
+        generateRandomTree(init_size);
         vector<pthread_t> producerThreads;
         for (int i = 0; i < producers; i++) {
             pthread_t p;
-            DEBUG("Creating producer thread %d\n", i);
+            LOG("Producer", _COLOR_YELLOW, "Creating producer %d\n", i);
             int* id = new int(i);
             pthread_create(&p, NULL, &handleProducer, (void*)id);
             producerThreads.push_back(p);
@@ -435,7 +464,7 @@ int main() {
             vector<pthread_t> threads;
             for (int i = 0; i < consumers; i++) {
                 pthread_t c;
-                DEBUG("Creating consumer thread %d\n", i);
+                LOG("Consumer", _COLOR_BLUE, "Creating consumer %d\n", i);
                 int* id = new int(i);
                 pthread_create(&c, NULL, &handleConsumerThread, (void*)id);
                 threads.push_back(c);
@@ -451,7 +480,9 @@ int main() {
     }
     while (wait(NULL) > 0)
         ;
+    shmdt(shm->nodes);
     shmdt(shm);
+    shmctl(shmid2, IPC_RMID, NULL);
     shmctl(shmid, IPC_RMID, NULL);
 }
 
@@ -459,4 +490,6 @@ int main() {
  * TODO LIST:
  * - Create random tree initially
  * - Add print statements
+ * - Check if zombie processes are being created or not ?
+ * - Destroy mutexes when exiting
  */
