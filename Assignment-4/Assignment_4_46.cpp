@@ -252,6 +252,7 @@ struct SharedMem {
 };
 
 SharedMem* shm;
+int shmid, shmid2;
 
 int getRandomJob(int idx) {
     PTHREAD_MUTEX_LOCK(&shm->nodes[idx].mutex);
@@ -371,15 +372,6 @@ void* handleConsumerThread(void* id) {
     pthread_exit(NULL);
 }
 
-int shmid, shmid2;
-void sigint_handler(int signum) {
-    shmdt(shm->nodes);
-    shmdt(shm);
-    shmctl(shmid2, IPC_RMID, NULL);
-    shmctl(shmid, IPC_RMID, NULL);
-    exit(1);
-}
-
 void printTree() {
     queue<int> q;
     q.push(shm->rootIdx);
@@ -421,6 +413,24 @@ void generateRandomTree(int numNodes) {
     cout << "Tree:";
     printTree();
     cout << "\n";
+}
+
+void cleanup() {
+    for (int i = 0; i < shm->size; i++) {
+        pthread_mutex_destroy(&shm->nodes[i].mutex);
+        pthread_mutexattr_destroy(&shm->nodes[i].attr);
+    }
+    pthread_mutex_destroy(&shm->mutex);
+    pthread_mutexattr_destroy(&shm->attr);
+    shmdt(shm->nodes);
+    shmdt(shm);
+    shmctl(shmid2, IPC_RMID, NULL);
+    shmctl(shmid, IPC_RMID, NULL);
+}
+
+void sigint_handler(int signum) {
+    cleanup();
+    exit(1);
 }
 
 int main() {
@@ -480,10 +490,7 @@ int main() {
     }
     while (wait(NULL) > 0)
         ;
-    shmdt(shm->nodes);
-    shmdt(shm);
-    shmctl(shmid2, IPC_RMID, NULL);
-    shmctl(shmid, IPC_RMID, NULL);
+    cleanup();
 }
 
 /**
