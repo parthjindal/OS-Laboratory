@@ -1,3 +1,4 @@
+#include <pthread.h>
 #include <stdlib.h>
 #include <unistd.h>
 
@@ -8,7 +9,11 @@
 #include <string>
 #include <vector>
 
+#include "debug.h"
+
 using namespace std;
+
+pthread_t gcThread;
 
 class Type {
    public:
@@ -69,16 +74,26 @@ struct SymbolTable {
     int head, tail;
     Symbol symbols[MAX_SYMBOLS];
     int size;
-    SymbolTable() : size(0), head(0), tail(MAX_SYMBOLS - 1) {
+    pthread_mutex_t mutex;
+    void Init() {
+        size = 0;
+        head = 0;
+        tail = MAX_SYMBOLS - 1;
         // Explicit free list
         for (int i = 0; i < MAX_SYMBOLS; i++) {
             symbols[i].word1 = 0;
             symbols[i].word2 = ((i + 1) * sizeof(Symbol)) << 1;
         }
         symbols[tail].word2 = -2;  // mark end of free list
+        pthread_mutexattr_t attr;
+        pthread_mutexattr_init(&attr);
+        pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_ERRORCHECK_NP);
+        pthread_mutex_init(&mutex, &attr);
     }
     int alloc(int wordidx, int offset) {
+        pthread_mutex_lock(&mutex);
         if (size == MAX_SYMBOLS) {
+            pthread_mutex_unlock(&mutex);
             return -1;
         }
         int idx = head;
@@ -86,22 +101,31 @@ struct SymbolTable {
         symbols[idx].word1 = (wordidx << 1) | 1;  // mark as allocated
         symbols[idx].word2 = (offset << 1) | 1;   // mark as in use
         size++;
+        pthread_mutex_unlock(&mutex);
         return idx;  // local address
     }
     void free(int idx) {
+        pthread_mutex_lock(&mutex);
         symbols[tail].word2 = idx << 1;
         symbols[idx].word1 = 0;
         symbols[idx].word2 = -2;
         tail = idx;
         size--;
+        pthread_mutex_unlock(&mutex);
     }
+    int getWordIdx(int idx) { return symbols[idx].word1 >> 1; }
+    int getOffset(int idx) { return symbols[idx].word2 >> 1; }
 };
+
+SymbolTable* symTable;
 
 #define MAX_STACK_SIZE 1024
 struct Stack {
     int top;
     int _elems[MAX_STACK_SIZE];
-    Stack() : top(0) {}
+    void Init() {
+        top = -1;
+    }
     void push(int elem) {
         _elems[top++] = elem;
     }
@@ -110,10 +134,12 @@ struct Stack {
     }
 };
 
+Stack* stack;
+
 struct MemBlock {
     int *start, *end;
     int* mem;
-    void init(int _size) {
+    void Init(int _size) {
         int size = (((_size + 3) >> 2) << 2) + 8;  // align to 4 bytes
                                                    // and add 8 bytes for header, footer
         mem = (int*)malloc(size);
@@ -121,6 +147,9 @@ struct MemBlock {
         end = mem + (size >> 2);
         *start = (size >> 2) << 1;                      // 31 bits store size last bit for if free or not
         *(start + (size >> 2) - 1) = (size >> 2) << 1;  // footer
+    }
+    ~MemBlock() {
+        free(mem);
     }
     int getMem(int size) {  // size in bytes (4 bytes aligned)
         int* p = start;
@@ -141,8 +170,8 @@ struct MemBlock {
         *ptr = (words << 1) | 1;
         *(ptr + words - 1) = (words << 1) | 1;  // footer
         if (size < oldsize) {
-            *(ptr + words) = (oldsize - size) << 1;
-            *(ptr + (oldsize >> 2) - 1) = (oldsize - size) << 1;
+            *(ptr + words) = (oldsize - size) >> 1;
+            *(ptr + (oldsize >> 2) - 1) = (oldsize - size) >> 1;
         }
     }
 
@@ -167,146 +196,73 @@ struct MemBlock {
     }
 };
 
+MemBlock* mem = nullptr;
+void createMem(int size) {
+    if (mem != nullptr)
+        throw std::runtime_error("Memory already created");
+    size_t t = sizeof(MemBlock) + sizeof(SymbolTable) + sizeof(Stack);
+    void* tmem = malloc(t);
+    mem = (MemBlock*)tmem;
+    mem->Init(size);
+    symTable = (SymbolTable*)((char*)tmem + sizeof(MemBlock));
+    symTable->Init();
+    stack = (Stack*)((char*)tmem + sizeof(MemBlock) + sizeof(SymbolTable));
+    stack->Init();
+}
+
+Ptr createVar(const Type& t) {
+    int _size = getSize(t);
+    _size = (((_size + 3) >> 2) << 2) + 8;
+    int wordid = mem->getMem(_size);
+    if (wordid == -1)
+        throw std::runtime_error("Out of memory");
+    int local_addr = symTable->alloc(wordid, 0);
+    return Ptr(t, local_addr);
+}
+
+void assignVar(const Ptr& p, int val) {
+    if (p.t.type != Type::INT)
+        throw std::runtime_error("Assignment to non-int variable");
+    int local_addr = p.addr;
+    int wordId = symTable->getWordIdx(local_addr);
+    int offset = symTable->getOffset(local_addr);
+    int* ptr = mem->start + wordId;
+    ptr = ptr + offset;
+    memcpy(ptr, &val, sizeof(int));
+}
+
+void assignVar(const Ptr& p, bool f) {
+    if (p.t.type != Type::BOOL)
+        throw std::runtime_error("Assignment to non-bool variable");
+    int local_addr = p.addr;
+    int wordId = symTable->getWordIdx(local_addr);
+    int offset = symTable->getOffset(local_addr);
+    int* ptr = mem->start + wordId;
+    ptr = ptr + offset;
+    memcpy(ptr, &f, sizeof(bool));
+}
+
+void assignVar(const Ptr& p) {
+}
+
 int main() {
     MemBlock* mem = new MemBlock();
-    mem->init(1024);
+    mem->Init(1024 * 1024);
     int word1 = mem->getMem(512);
     cout << "word1: " << word1 << endl;
     int word2 = mem->getMem(256);
     cout << "word2: " << word2 << endl;
     int word3 = mem->getMem(128);
     cout << "word3: " << word3 << endl;
-    mem->freeBlock(word3);
-    cout << "freeing word3" << endl;
-    mem->freeBlock(word2);
-    cout << "freeing word2" << endl;
+    // mem->freeBlock(word3);
+    // cout << "freeing word3" << endl;
+    // mem->freeBlock(word2);
+    // cout << "freeing word2" << endl;
     mem->freeBlock(word1);
     cout << "freeing word1" << endl;
 
-    word1 = mem->getMem(512);
+    word1 = mem->getMem(32);
     cout << "word1: " << word1 << endl;
+    int word4 = mem->getMem(64);
+    cout << "word4: " << word4 << endl;
 }
-
-// void* mem;
-
-// void createMem(size_t bytes) {
-//     mem = malloc(bytes);
-//     sizeof(SymbolTable);
-// }
-
-// Ptr createVar(const Type& t) {
-//     Ptr p(t, 0);
-// }
-
-// int main() {
-//     Type t1 = Type(Type::INT);
-//     Type t2 = Type(Type::CHAR);
-//     Type t3 = Type(Type::BOOL);
-//     Type t4 = Type(Type::MEDIUM_INT);
-//     ArrType t5 = ArrType(10, Type::INT);
-// }
-
-// size_t
-// getSize(const Type& type) {
-// }
-
-// struct Ptr {
-//     int addr;
-//     Type type;
-// };
-
-// void createVar(const Type& type, const std::string& name,
-//                const std::string& value) {
-//     if (type.type == TypeEnum::INT) {
-//     }
-// }
-
-// // extern void* mem;
-
-// struct Mem {
-//     void* mem;
-//     size_t size;
-//     pthread_mutex_t mutex;
-// };
-
-// struct hole {
-//     int base;
-//     size_t size;
-//     hole* next;
-//     hole* prev;
-//     hole(int _base, size_t _size) : base(_base), size(_size), next(nullptr), prev(nullptr) {}
-// };
-
-// struct holeList {
-//     hole* head;
-//     hole* tail;
-//     holeList() : head(nullptr), tail(nullptr) {}
-// };
-
-// size_t findTypeSize(TypeEnum type) {
-//     switch (type) {
-//         case INT:
-//             return 32;
-//         case CHAR:
-//             return 8;
-//         case BOOL:
-//             return 1;
-//         case MEDIUM_INT:
-//             return 24;
-//         case ARRAY:
-//             return 0;  // pointer type
-//     }
-// }
-
-// struct Type {
-//     TypeEnum type;
-//     Type* subtype;
-//     size_t width;
-//     // subtype is only used for array and pointer
-//     Type(TypeEnum& type, Type* subtype = nullptr, size_t width = 0) : type(type), subtype(subtype), width(width) {}
-//     Type(const Type& other) {
-//         type = other.type;
-//         subtype = other.subtype;
-//         width = other.width;
-//     }
-// };
-
-// struct Symbol {
-//     std::string name;
-//     const Type& type;
-//     int offset;
-//     Symbol(std::string& name, const Type& type, int offset) : name(name), type(type), offset(offset) {}
-// };
-
-// struct SymbolTable {
-// }
-
-// void
-// createMem(size_t size) {
-//     mem = malloc(size);
-//     if (mem == NULL) {
-//         std::cout << "Error: malloc failed" << std::endl;
-//         exit(1);
-//     }
-//     memset(mem, 0, size);
-// }
-
-// class SymType;
-
-// class Symbol {
-//     std::string name;
-//     const SymType& type;
-//     size_t offset;
-//     Symbol(const std::string& _name, const SymType& _type)
-//         : name(_name), type(_type) {}
-//     ~Symbol() {}
-//     Symbol(const Symbol& symbol)
-//         : name(symbol.name), type(symbol.type), offset(symbol.offset) {}
-
-//     std::ostream& operator<<(std::ostream& os) const {
-//         os << name << ": " << type << " @ " << offset;
-//         return os;
-//     }
-// };
-
-// struct
