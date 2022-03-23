@@ -116,7 +116,6 @@ struct MemBlock {
     void init(int _size) {
         int size = (((_size + 3) >> 2) << 2) + 8;  // align to 4 bytes
                                                    // and add 8 bytes for header, footer
-        cout << "Allocating " << size << " bytes" << endl;
         mem = (int*)malloc(size);
         start = mem;
         end = mem + (size >> 2);
@@ -126,7 +125,6 @@ struct MemBlock {
     int getMem(int size) {  // size in bytes (4 bytes aligned)
         int* p = start;
         int newsize = (((size + 3) >> 2) << 2) + 8;
-        cout << "gettting " << newsize << " bytes" << endl;
         while ((p < end) &&
                ((*p & 1) ||
                 ((*p << 1) < newsize)))
@@ -139,11 +137,12 @@ struct MemBlock {
     }
     void addBlock(int* ptr, int size) {
         int oldsize = *ptr << 1;  // old size in bytes
-        *ptr = (size >> 2) << 1;
         int words = size >> 2;
+        *ptr = (words << 1) | 1;
+        *(ptr + words - 1) = (words << 1) | 1;  // footer
         if (size < oldsize) {
-            *(ptr + words) = (oldsize >> 2) << 1;  // old size in words
-            *(ptr + words + (oldsize >> 2) - 1) = (oldsize >> 2) << 1;
+            *(ptr + words) = (oldsize - size) << 1;
+            *(ptr + (oldsize >> 2) - 1) = (oldsize - size) << 1;
         }
     }
 
