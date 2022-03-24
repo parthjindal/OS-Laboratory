@@ -240,6 +240,29 @@ inline Type::TypeEnum getType(const Ptr& p) {
     return p.t.type;
 }
 
+void printVar(const Ptr& p) {
+    int local_addr = p.addr >> 2;  // TODO: write a function here
+    int wordId = symTable->getWordIdx(local_addr);
+    int offset = symTable->getOffset(local_addr);
+    int* ptr = mem->start + wordId + 1;  // +1 for header
+    if (p.t.type == Type::INT) {
+        ptr = (int*)((char*)ptr + offset);
+        printf("%d\n", *ptr);
+    } else if (p.t.type == Type::BOOL) {
+        bool* ptr2 = (bool*)((char*)ptr + offset);
+        printf("%d\n", *ptr2);
+    } else if (p.t.type == Type::CHAR) {
+        char* ptr3 = (char*)((char*)ptr + offset);
+        printf("%c\n", *ptr3);
+    } else if (p.t.type == Type::MEDIUM_INT) {
+        ptr = (int*)((char*)ptr + offset);
+        printf("%d\n", *ptr);
+    } else
+        throw std::runtime_error("Invalid type");
+    printf("%d\n", *ptr);
+    // memcpy((void*)ptr, &val, sizeof(int));
+}
+
 void assignVar(const Ptr& p, int val) {
     if (getType(p) != Type::INT)
         throw std::runtime_error("Assignment to non-int variable");
@@ -273,23 +296,23 @@ void assignVar(const Ptr& p, char c) {
     memcpy((void*)ptr, &c, sizeof(char));
 }
 
-void assignVar(const Ptr& p, medium_int t) {
-    if (getType(p) != Type::MEDIUM_INT)
-        throw std::runtime_error("Assignment to non-medium_int variable");
-    int local_addr = p.addr >> 2;  // TODO: write a function here
-    int wordId = symTable->getWordIdx(local_addr);
-    int offset = symTable->getOffset(local_addr);
-    int* ptr = mem->start + wordId + 1;  // +1 for header
-    ptr = (int*)((char*)ptr + offset);
-    memcpy((void*)ptr, &t, getSize(p.t));
-}
+// void assignVar(const Ptr& p, medium_int t) {
+//     if (getType(p) != Type::MEDIUM_INT)
+//         throw std::runtime_error("Assignment to non-medium_int variable");
+//     int local_addr = p.addr >> 2;  // TODO: write a function here
+//     int wordId = symTable->getWordIdx(local_addr);
+//     int offset = symTable->getOffset(local_addr);
+//     int* ptr = mem->start + wordId + 1;  // +1 for header
+//     ptr = (int*)((char*)ptr + offset);
+//     memcpy((void*)ptr, &t, getSize(p.t));
+// }
 
-ArrType createArr(const Type& t, int width) {
-    int _count = 
-}
+// ArrType createArr(const Type& t, int width) {
+//     int _count =
+// }
 
-void assignVar(const Ptr& p) {
-}
+// void assignVar(const Ptr& p) {
+// }
 
 void testMemBlock() {
     MemBlock* mem = new MemBlock();
@@ -339,9 +362,26 @@ void testCreateVar() {
     cout << p3.addr << endl;
 }
 
+void testAssignVar() {
+    createMem(1024 * 1024);
+    Ptr p1 = createVar(Type(Type::INT));
+    Ptr p2 = createVar(Type(Type::BOOL));
+    Ptr p3 = createVar(Type(Type::MEDIUM_INT));
+    Ptr p4 = createVar(Type(Type::CHAR));
+    assignVar(p1, 1);
+    assignVar(p2, true);
+    // assignVar(p3, (medium_int)2);
+    assignVar(p4, 'a');
+    printVar(p1);
+    printVar(p2);
+    printVar(p3);
+    printVar(p4);
+}
+
 int main() {
     // testSymbolTable();Type(Type::INT)
-    testCreateVar();
+    // testCreateVar();
+    testAssignVar();
 }
 
 /**
