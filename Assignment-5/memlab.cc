@@ -191,8 +191,8 @@ void MemBlock::freeBlock(int wordid) {
     if (ptr != start && (*(ptr - 1) & 1) == 0) {  // previous is also free so coelesce
         int prevwords = (*(ptr - 1) >> 1);
         *(ptr - prevwords) = (prevwords + words) << 1;  // new size in words
-        words = words + prevwords;
-        *(ptr + words - 1) = (words) << 1;  // footer
+        // words = words + prevwords;
+        *(ptr + words - 1) = (prevwords + words) << 1;  // footer
     }
 }
 
