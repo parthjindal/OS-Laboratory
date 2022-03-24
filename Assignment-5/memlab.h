@@ -12,7 +12,7 @@
 #include "debug.h"
 
 #define GC_PERIOD_MS 100
-#define MAX_SYMBOLS 1024
+#define MAX_SYMBOLS 6
 #define MAX_STACK_SIZE 1024
 
 enum Type {

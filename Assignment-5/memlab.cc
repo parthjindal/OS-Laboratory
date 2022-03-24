@@ -12,11 +12,14 @@
 #include <vector>
 
 #include "debug.h"
-
 using namespace std;
 
 #define GC_PERIOD_MS 100
 pthread_t gcThread;
+
+MemBlock* mem = nullptr;
+Stack* stack;
+SymbolTable* symTable;
 
 int getSize(const Type& type) {
     switch (type) {
@@ -94,8 +97,6 @@ int* SymbolTable::getPtr(unsigned int idx) {
     return ptr;
 }
 
-SymbolTable* symTable;
-
 void Stack::Init() {
     _top = -1;
 }
@@ -109,11 +110,9 @@ int Stack::top() {
     return _elems[_top];
 }
 
-Stack* stack;
-
 void MemBlock::Init(int _size) {
     int size = (((_size + 3) >> 2) << 2) + 8;  // align to 4 bytes
-                                                // and add 8 bytes for header, footer
+                                               // and add 8 bytes for header, footer
     mem = (int*)malloc(size);
     start = mem;
     end = mem + (size >> 2);
@@ -130,7 +129,7 @@ int MemBlock::getMem(int size) {  // size in bytes (4 bytes aligned)
     int* p = start;
     int newsize = (((size + 3) >> 2) << 2) + 8;
     while ((p < end) &&
-            ((*p & 1) ||
+           ((*p & 1) ||
             ((*p << 1) < newsize)))
         p = p + (*p >> 1);
     if (p == end) {
@@ -171,8 +170,6 @@ void MemBlock::freeBlock(int wordid) {
     }
 }
 
-MemBlock* mem = nullptr;
-
 void createMem(int size) {
     if (mem != nullptr)
         throw std::runtime_error("Memory already created");
@@ -188,10 +185,6 @@ void createMem(int size) {
     if (ret != 0) {
         throw std::runtime_error("Error creating garbage collector thread");
     }
-}
-
-inline int translate(int local_addr) {
-    return local_addr << 2;
 }
 
 Ptr createVar(const Type& t) {
@@ -285,6 +278,7 @@ void endScope() {
 }
 
 void _freeElem(int local_addr) {
+    cout << gettid() << " freeing " << local_addr << endl;
     int wordId = symTable->getWordIdx(local_addr);
     mem->freeBlock(wordId);
     symTable->free(local_addr);
@@ -478,6 +472,14 @@ void testCode() {
     freeElem(p1);
     freeElem(p3);
     Ptr p5 = createVar(Type::INT);
+    cout << "p5.addr: " << p5.addr << endl;
+    endScope();
+    initScope();
+    usleep(100 * 1000);
+    p1 = createVar(Type::INT);
+    p2 = createVar(Type::BOOL);
+    p3 = createVar(Type::MEDIUM_INT);
+    p4 = createVar(Type::CHAR);
     endScope();
     sleep(100);
     freeMem();
@@ -486,7 +488,8 @@ void testCode() {
 int main() {
     // // testSymbolTable();Type(Type::INT)
     // // testCreateVar();
-    testAssignVar();
+    // testAssignVar();
+    testCode();
     // ArrType a = ArrType(10, Type::INT);
     // Type t = a;
     // const ArrType& x = static_cast<const ArrType&>(t);
