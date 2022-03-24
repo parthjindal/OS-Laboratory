@@ -147,6 +147,7 @@ Stack* stack;
 struct MemBlock {
     int *start, *end;
     int* mem;
+    pthread_mutex_t mutex;
     void Init(int _size) {
         int size = (((_size + 3) >> 2) << 2) + 8;  // align to 4 bytes
                                                    // and add 8 bytes for header, footer
@@ -307,6 +308,7 @@ void endScope() {
         int local_addr = stack->pop();
         symTable->setUnmarked(local_addr);
     }
+    stack->pop();  // pop -1
 }
 
 void freeElem(const Ptr& p) {
