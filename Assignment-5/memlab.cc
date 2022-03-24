@@ -14,12 +14,29 @@
 #include "debug.h"
 using namespace std;
 
-#define GC_PERIOD_MS 100
 pthread_t gcThread;
 
 MemBlock* mem = nullptr;
 Stack* stack;
 SymbolTable* symTable;
+
+#define PTHREAD_MUTEX_LOCK(mutex_p)                                              \
+    do {                                                                         \
+        int ret = pthread_mutex_lock(mutex_p);                                   \
+        if (ret != 0) {                                                          \
+            ERROR("%d: pthread_mutex_lock failed: %s", __LINE__, strerror(ret)); \
+            exit(1);                                                             \
+        }                                                                        \
+    } while (0)
+
+#define PTHREAD_MUTEX_UNLOCK(mutex_p)                                              \
+    do {                                                                           \
+        int ret = pthread_mutex_unlock(mutex_p);                                   \
+        if (ret != 0) {                                                            \
+            ERROR("%d: pthread_mutex_unlock failed: %d", __LINE__, strerror(ret)); \
+            exit(1);                                                               \
+        }                                                                          \
+    } while (0)
 
 int getSize(const Type& type) {
     switch (type) {
@@ -65,7 +82,7 @@ unsigned int SymbolTable::alloc(unsigned int wordidx, unsigned int offset) {
         return -1;
     }
     // DEBUG()
-    cout << "Allocating symbol " << wordidx << ":" << offset << endl;
+    // cout << "Allocating symbol " << wordidx << ":" << offset << endl;
     unsigned int idx = head;
     head = (symbols[head].word2 & -2) >> 1;
     symbols[idx].word1 = (wordidx << 1) | 1;  // mark as allocated
@@ -118,6 +135,10 @@ void MemBlock::Init(int _size) {
     end = mem + (size >> 2);
     *start = (size >> 2) << 1;                      // 31 bits store size last bit for if free or not
     *(start + (size >> 2) - 1) = (size >> 2) << 1;  // footer
+    pthread_mutexattr_t attr;
+    pthread_mutexattr_init(&attr);
+    pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_ERRORCHECK_NP);
+    pthread_mutex_init(&mutex, &attr);
 }
 
 MemBlock::~MemBlock() {
@@ -128,10 +149,15 @@ MemBlock::~MemBlock() {
 int MemBlock::getMem(int size) {  // size in bytes (4 bytes aligned)
     int* p = start;
     int newsize = (((size + 3) >> 2) << 2) + 8;
+    cout << "Allocating " << newsize << " bytes" << endl;
     while ((p < end) &&
            ((*p & 1) ||
-            ((*p << 1) < newsize)))
+            ((*p << 1) < newsize))) {
+        // cout << (*p >> 1) << endl;
         p = p + (*p >> 1);
+
+    }
+    cout << "Allocating " << newsize << " bytes at " << p << endl;
     if (p == end) {
         return -1;
     }
@@ -166,7 +192,7 @@ void MemBlock::freeBlock(int wordid) {
         int prevwords = (*(ptr - 1) >> 1);
         *(ptr - prevwords) = (prevwords + words) << 1;  // new size in words
         words = words + prevwords;
-        *(ptr + words - 1) = (prevwords + words) << 1;  // footer
+        *(ptr + words - 1) = (words) << 1;  // footer
     }
 }
 
@@ -190,14 +216,16 @@ void createMem(int size) {
 Ptr createVar(const Type& t) {
     int _size = getSize(t);
     _size = (((_size + 3) >> 2) << 2);
-    pthread_mutex_lock(&mem->mutex);
+    PTHREAD_MUTEX_LOCK(&mem->mutex);
     int wordid = mem->getMem(_size);
-    pthread_mutex_unlock(&mem->mutex);
+    PTHREAD_MUTEX_UNLOCK(&mem->mutex);
     if (wordid == -1)
         throw std::runtime_error("Out of memory");
-    pthread_mutex_lock(&symTable->mutex);
+    PTHREAD_MUTEX_LOCK(&symTable->mutex);
     int local_addr = symTable->alloc(wordid, 0);
-    pthread_mutex_unlock(&symTable->mutex);
+    if (local_addr == -1)
+        throw std::runtime_error("Out of memory in symbol table");
+    PTHREAD_MUTEX_UNLOCK(&symTable->mutex);
     stack->push(local_addr);
     return Ptr(t, translate(local_addr));
 }
@@ -251,14 +279,18 @@ ArrPtr createArr(const Type& t, int width) {
     int _count = (1 << 2) / getSize(t);
     int _width = (width + _count - 1) / _count;  // round up
     int _size = _width << 2;
-    pthread_mutex_lock(&mem->mutex);
+    PTHREAD_MUTEX_LOCK(&mem->mutex);
+    cout << "Creating array of size " << _size << endl;
     int wordid = mem->getMem(_size);
-    pthread_mutex_unlock(&mem->mutex);
+    cout << "wordid: " << wordid << endl;
+    PTHREAD_MUTEX_UNLOCK(&mem->mutex);
     if (wordid == -1)
         throw std::runtime_error("Out of memory");
-    pthread_mutex_lock(&symTable->mutex);
+    PTHREAD_MUTEX_LOCK(&symTable->mutex);
     int local_addr = symTable->alloc(wordid, 0);
-    pthread_mutex_unlock(&symTable->mutex);
+    if (local_addr == -1)
+        throw std::runtime_error("Out of memory in symbol table");
+    PTHREAD_MUTEX_UNLOCK(&symTable->mutex);
     stack->push(local_addr);
     return ArrPtr(t, translate(local_addr), _width);
 }
@@ -270,9 +302,9 @@ void initScope() {
 void endScope() {
     while (stack->top() != -1) {
         int local_addr = stack->pop();
-        pthread_mutex_lock(&symTable->mutex);  //  todo: chekc if this is required
+        PTHREAD_MUTEX_LOCK(&symTable->mutex);  //  todo: chekc if this is required
         symTable->setUnmarked(local_addr);
-        pthread_mutex_unlock(&symTable->mutex);
+        PTHREAD_MUTEX_UNLOCK(&symTable->mutex);
     }
     stack->pop();  // pop -1
 }
@@ -285,23 +317,23 @@ void _freeElem(int local_addr) {
 }
 
 void freeElem(const Ptr& p) {
-    pthread_mutex_lock(&symTable->mutex);
-    pthread_mutex_lock(&mem->mutex);
+    PTHREAD_MUTEX_LOCK(&symTable->mutex);
+    PTHREAD_MUTEX_LOCK(&mem->mutex);
     int local_addr = p.addr >> 2;  // TODO: write a function here
     _freeElem(local_addr);
-    pthread_mutex_unlock(&mem->mutex);
-    pthread_mutex_unlock(&symTable->mutex);
+    PTHREAD_MUTEX_UNLOCK(&mem->mutex);
+    PTHREAD_MUTEX_UNLOCK(&symTable->mutex);
 }
 
 void gc_run() {
     for (int i = 0; i < MAX_SYMBOLS; i++) {
-        pthread_mutex_lock(&symTable->mutex);
+        PTHREAD_MUTEX_LOCK(&symTable->mutex);
         if (symTable->isAllocated(i) && !symTable->isMarked(i)) {
-            pthread_mutex_lock(&mem->mutex);
+            PTHREAD_MUTEX_LOCK(&mem->mutex);
             _freeElem(i);
-            pthread_mutex_unlock(&mem->mutex);
+            PTHREAD_MUTEX_UNLOCK(&mem->mutex);
         }
-        pthread_mutex_unlock(&symTable->mutex);
+        PTHREAD_MUTEX_UNLOCK(&symTable->mutex);
     }
 }
 
@@ -485,15 +517,15 @@ void testCode() {
     freeMem();
 }
 
-int main() {
-    // // testSymbolTable();Type(Type::INT)
-    // // testCreateVar();
-    // testAssignVar();
-    testCode();
-    // ArrType a = ArrType(10, Type::INT);
-    // Type t = a;
-    // const ArrType& x = static_cast<const ArrType&>(t);
-}
+// int main() {
+//     // // testSymbolTable();Type(Type::INT)
+//     // // testCreateVar();
+//     // testAssignVar();
+//     testCode();
+//     // ArrType a = ArrType(10, Type::INT);
+//     // Type t = a;
+//     // const ArrType& x = static_cast<const ArrType&>(t);
+// }
 
 /**
  * TODO LIST:
