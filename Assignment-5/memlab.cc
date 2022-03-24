@@ -14,6 +14,7 @@
 using namespace std;
 
 pthread_t gcThread;
+typedef int medium_int;
 
 class Type {
    public:
@@ -235,26 +236,56 @@ Ptr createVar(const Type& t) {
     return Ptr(t, translate(local_addr));
 }
 
+inline Type::TypeEnum getType(const Ptr& p) {
+    return p.t.type;
+}
+
 void assignVar(const Ptr& p, int val) {
-    if (p.t.type != Type::INT)
+    if (getType(p) != Type::INT)
         throw std::runtime_error("Assignment to non-int variable");
-    int local_addr = p.addr;
+    int local_addr = p.addr >> 2;  // TODO: write a function here
     int wordId = symTable->getWordIdx(local_addr);
     int offset = symTable->getOffset(local_addr);
-    int* ptr = mem->start + wordId;
-    ptr = ptr + offset;
-    memcpy(ptr, &val, sizeof(int));
+    int* ptr = mem->start + wordId + 1;  // +1 for header
+    ptr = (int*)((char*)ptr + offset);
+    memcpy((void*)ptr, &val, sizeof(int));
 }
 
 void assignVar(const Ptr& p, bool f) {
-    if (p.t.type != Type::BOOL)
+    if (getType(p) != Type::BOOL)
         throw std::runtime_error("Assignment to non-bool variable");
-    int local_addr = p.addr;
+    int local_addr = p.addr >> 2;  // TODO: write a function here
     int wordId = symTable->getWordIdx(local_addr);
     int offset = symTable->getOffset(local_addr);
-    int* ptr = mem->start + wordId;
-    ptr = ptr + offset;
-    memcpy(ptr, &f, sizeof(bool));
+    int* ptr = mem->start + wordId + 1;  // +1 for header
+    ptr = (int*)((char*)ptr + offset);
+    memcpy((void*)ptr, &f, sizeof(bool));
+}
+
+void assignVar(const Ptr& p, char c) {
+    if (getType(p) != Type::CHAR)
+        throw std::runtime_error("Assignment to non-char variable");
+    int local_addr = p.addr >> 2;  // TODO: write a function here
+    int wordId = symTable->getWordIdx(local_addr);
+    int offset = symTable->getOffset(local_addr);
+    int* ptr = mem->start + wordId + 1;  // +1 for header
+    ptr = (int*)((char*)ptr + offset);
+    memcpy((void*)ptr, &c, sizeof(char));
+}
+
+void assignVar(const Ptr& p, medium_int t) {
+    if (getType(p) != Type::MEDIUM_INT)
+        throw std::runtime_error("Assignment to non-medium_int variable");
+    int local_addr = p.addr >> 2;  // TODO: write a function here
+    int wordId = symTable->getWordIdx(local_addr);
+    int offset = symTable->getOffset(local_addr);
+    int* ptr = mem->start + wordId + 1;  // +1 for header
+    ptr = (int*)((char*)ptr + offset);
+    memcpy((void*)ptr, &t, getSize(p.t));
+}
+
+ArrType createArr(const Type& t, int width) {
+    int _count = 
 }
 
 void assignVar(const Ptr& p) {
@@ -306,7 +337,6 @@ void testCreateVar() {
     cout << p1.addr << endl;
     cout << p2.addr << endl;
     cout << p3.addr << endl;
-    
 }
 
 int main() {
