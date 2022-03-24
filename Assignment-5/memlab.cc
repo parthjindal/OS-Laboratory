@@ -1,3 +1,5 @@
+#include "memlab.h"
+
 #include <pthread.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -15,14 +17,6 @@ using namespace std;
 
 #define GC_PERIOD_MS 100
 pthread_t gcThread;
-
-enum Type {
-    INT,
-    CHAR,
-    MEDIUM_INT,
-    BOOL,
-    ARRAY
-};
 
 int getSize(const Type& type) {
     switch (type) {
@@ -42,179 +36,143 @@ int getSize(const Type& type) {
     }
 }
 
-struct Ptr {
-    const Type type;
-    const int addr;
-    Ptr(const Type& _t, int _addr) : type(_t), addr(_addr) {}
-};
-
-struct ArrPtr : public Ptr {
-    int width;
-    ArrPtr(const Type& t, int _addr, int _width) : Ptr(t, _addr), width(_width) {}
-};
-
-// valid, mark bit fields are stored as LSB's
-struct Symbol {
-    // word1 -> 31 bits for wordIdx, 1 bit for if symbol is allocated in symboltable memory
-    // word2 -> 31 bits for offset, 1 bit for if symbol is in use (mark for garbage collection)
-    unsigned int word1, word2;
-};
-
-#define MAX_SYMBOLS 1024
-struct SymbolTable {
-    unsigned int head, tail;
-    Symbol symbols[MAX_SYMBOLS];
-    int size;
-    pthread_mutex_t mutex;
-    void Init() {
-        size = 0;
-        head = 0;
-        tail = MAX_SYMBOLS - 1;
-        // Explicit free list
-        for (int i = 0; i < MAX_SYMBOLS; i++) {
-            symbols[i].word1 = 0;
-            symbols[i].word2 = ((i + 1)) << 1;
-        }
-        symbols[tail].word2 = -2;  // mark end of free list
-        pthread_mutexattr_t attr;
-        pthread_mutexattr_init(&attr);
-        pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_ERRORCHECK_NP);
-        pthread_mutex_init(&mutex, &attr);
-        // cout << "SymbolTable initialized" << endl;
+void SymbolTable::Init() {
+    size = 0;
+    head = 0;
+    tail = MAX_SYMBOLS - 1;
+    // Explicit free list
+    for (int i = 0; i < MAX_SYMBOLS; i++) {
+        symbols[i].word1 = 0;
+        symbols[i].word2 = ((i + 1)) << 1;
     }
-    ~SymbolTable() {
-        pthread_mutex_destroy(&mutex);
+    symbols[tail].word2 = -2;  // mark end of free list
+    pthread_mutexattr_t attr;
+    pthread_mutexattr_init(&attr);
+    pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_ERRORCHECK_NP);
+    pthread_mutex_init(&mutex, &attr);
+    // cout << "SymbolTable initialized" << endl;
+}
+
+SymbolTable::~SymbolTable() {
+    pthread_mutex_destroy(&mutex);
+}
+
+unsigned int SymbolTable::alloc(unsigned int wordidx, unsigned int offset) {
+    if (size == MAX_SYMBOLS) {
+        return -1;
     }
-    unsigned int alloc(unsigned int wordidx, unsigned int offset) {
-        if (size == MAX_SYMBOLS) {
-            return -1;
-        }
-        // DEBUG()
-        cout << "Allocating symbol " << wordidx << ":" << offset << endl;
-        unsigned int idx = head;
-        head = (symbols[head].word2 & -2) >> 1;
-        symbols[idx].word1 = (wordidx << 1) | 1;  // mark as allocated
-        symbols[idx].word2 = (offset << 1) | 1;   // mark as in use
-        size++;
-        return idx;  // local address
-    }
-    void free(unsigned int idx) {
-        if (size == MAX_SYMBOLS) {
-            head = tail = idx;
-            symbols[idx].word1 = 0;
-            symbols[idx].word2 = -2;  // sentinel
-            size--;
-            return;
-        }
-        symbols[tail].word2 = idx << 1;
+    // DEBUG()
+    cout << "Allocating symbol " << wordidx << ":" << offset << endl;
+    unsigned int idx = head;
+    head = (symbols[head].word2 & -2) >> 1;
+    symbols[idx].word1 = (wordidx << 1) | 1;  // mark as allocated
+    symbols[idx].word2 = (offset << 1) | 1;   // mark as in use
+    size++;
+    return idx;  // local address
+}
+
+void SymbolTable::free(unsigned int idx) {
+    if (size == MAX_SYMBOLS) {
+        head = tail = idx;
         symbols[idx].word1 = 0;
         symbols[idx].word2 = -2;  // sentinel
-        tail = idx;
         size--;
+        return;
     }
-    inline int getWordIdx(unsigned int idx) { return symbols[idx].word1 >> 1; }
-    inline int getOffset(unsigned int idx) { return symbols[idx].word2 >> 1; }
-    inline void setMarked(unsigned int idx) { symbols[idx].word2 |= 1; }     // mark as in use
-    inline void setUnmarked(unsigned int idx) { symbols[idx].word2 &= -2; }  // mark as free
-    inline void setAllocated(unsigned int idx) { symbols[idx].word1 |= 1; }  // mark as allocated
-    inline void setUnallocated(unsigned int idx) { symbols[idx].word1 &= -2; }
-    inline bool isMarked(unsigned int idx) { return symbols[idx].word2 & 1; }
-    inline bool isAllocated(unsigned int idx) { return symbols[idx].word1 & 1; }
+    symbols[tail].word2 = idx << 1;
+    symbols[idx].word1 = 0;
+    symbols[idx].word2 = -2;  // sentinel
+    tail = idx;
+    size--;
+}
 
-    int* getPtr(unsigned int idx) {
-        int wordidx = getWordIdx(idx);
-        int offset = getOffset(idx);
-        int* ptr = mem->start + wordidx + 1;
-        ptr = (int*)((char*)ptr + offset);
-        return ptr;
-    }
-};
+int* SymbolTable::getPtr(unsigned int idx) {
+    int wordidx = getWordIdx(idx);
+    int offset = getOffset(idx);
+    int* ptr = mem->start + wordidx + 1;
+    ptr = (int*)((char*)ptr + offset);
+    return ptr;
+}
 
 SymbolTable* symTable;
 
-#define MAX_STACK_SIZE 1024
-struct Stack {
-    int _top;
-    int _elems[MAX_STACK_SIZE];
-    void Init() {
-        _top = -1;
-    }
-    void push(int elem) {
-        _elems[++_top] = elem;
-    }
-    int pop() {
-        return _elems[_top--];
-    }
-    int top() {
-        return _elems[_top];
-    }
-};
+void Stack::Init() {
+    _top = -1;
+}
+void Stack::push(int elem) {
+    _elems[++_top] = elem;
+}
+int Stack::pop() {
+    return _elems[_top--];
+}
+int Stack::top() {
+    return _elems[_top];
+}
 
 Stack* stack;
 
-struct MemBlock {
-    int *start, *end;
-    int* mem;
-    pthread_mutex_t mutex;
-    void Init(int _size) {
-        int size = (((_size + 3) >> 2) << 2) + 8;  // align to 4 bytes
-                                                   // and add 8 bytes for header, footer
-        mem = (int*)malloc(size);
-        start = mem;
-        end = mem + (size >> 2);
-        *start = (size >> 2) << 1;                      // 31 bits store size last bit for if free or not
-        *(start + (size >> 2) - 1) = (size >> 2) << 1;  // footer
-    }
-    ~MemBlock() {
-        free(mem);
-        pthread_mutex_destroy(&mutex);
-    }
-    int getMem(int size) {  // size in bytes (4 bytes aligned)
-        int* p = start;
-        int newsize = (((size + 3) >> 2) << 2) + 8;
-        while ((p < end) &&
-               ((*p & 1) ||
-                ((*p << 1) < newsize)))
-            p = p + (*p >> 1);
-        if (p == end) {
-            return -1;
-        }
-        addBlock((int*)p, newsize);
-        return (p - start);
-    }
-    void addBlock(int* ptr, int size) {
-        int oldsize = *ptr << 1;  // old size in bytes
-        int words = size >> 2;
-        *ptr = (words << 1) | 1;
-        *(ptr + words - 1) = (words << 1) | 1;  // footer
-        if (size < oldsize) {
-            *(ptr + words) = (oldsize - size) >> 1;
-            *(ptr + (oldsize >> 2) - 1) = (oldsize - size) >> 1;
-        }
-    }
+void MemBlock::Init(int _size) {
+    int size = (((_size + 3) >> 2) << 2) + 8;  // align to 4 bytes
+                                                // and add 8 bytes for header, footer
+    mem = (int*)malloc(size);
+    start = mem;
+    end = mem + (size >> 2);
+    *start = (size >> 2) << 1;                      // 31 bits store size last bit for if free or not
+    *(start + (size >> 2) - 1) = (size >> 2) << 1;  // footer
+}
 
-    void freeBlock(int wordid) {
-        int* ptr = start + wordid;
-        int words = *ptr >> 1;
-        *ptr = *ptr & -2;                // mark as free
-        *(ptr + words - 1) = *ptr & -2;  // mark as free
+MemBlock::~MemBlock() {
+    free(mem);
+    pthread_mutex_destroy(&mutex);
+}
 
-        int* next = ptr + words;
-        if (next != end && (*next & 1) == 0) {  // next is also free so coelesce
-            words = words + (*next >> 1);
-            *ptr = words << 1;                        // new size in words
-            *(next + (*next >> 1) - 1) = words << 1;  // footer
-        }
-        if (ptr != start && (*(ptr - 1) & 1) == 0) {  // previous is also free so coelesce
-            int prevwords = (*(ptr - 1) >> 1);
-            *(ptr - prevwords) = (prevwords + words) << 1;  // new size in words
-            words = words + prevwords;
-            *(ptr + words - 1) = (prevwords + words) << 1;  // footer
-        }
+int MemBlock::getMem(int size) {  // size in bytes (4 bytes aligned)
+    int* p = start;
+    int newsize = (((size + 3) >> 2) << 2) + 8;
+    while ((p < end) &&
+            ((*p & 1) ||
+            ((*p << 1) < newsize)))
+        p = p + (*p >> 1);
+    if (p == end) {
+        return -1;
     }
-};
+    addBlock((int*)p, newsize);
+    return (p - start);
+}
+
+void MemBlock::addBlock(int* ptr, int size) {
+    int oldsize = *ptr << 1;  // old size in bytes
+    int words = size >> 2;
+    *ptr = (words << 1) | 1;
+    *(ptr + words - 1) = (words << 1) | 1;  // footer
+    if (size < oldsize) {
+        *(ptr + words) = (oldsize - size) >> 1;
+        *(ptr + (oldsize >> 2) - 1) = (oldsize - size) >> 1;
+    }
+}
+
+void MemBlock::freeBlock(int wordid) {
+    int* ptr = start + wordid;
+    int words = *ptr >> 1;
+    *ptr = *ptr & -2;                // mark as free
+    *(ptr + words - 1) = *ptr & -2;  // mark as free
+
+    int* next = ptr + words;
+    if (next != end && (*next & 1) == 0) {  // next is also free so coelesce
+        words = words + (*next >> 1);
+        *ptr = words << 1;                        // new size in words
+        *(next + (*next >> 1) - 1) = words << 1;  // footer
+    }
+    if (ptr != start && (*(ptr - 1) & 1) == 0) {  // previous is also free so coelesce
+        int prevwords = (*(ptr - 1) >> 1);
+        *(ptr - prevwords) = (prevwords + words) << 1;  // new size in words
+        words = words + prevwords;
+        *(ptr + words - 1) = (prevwords + words) << 1;  // footer
+    }
+}
 
 MemBlock* mem = nullptr;
+
 void createMem(int size) {
     if (mem != nullptr)
         throw std::runtime_error("Memory already created");
@@ -232,7 +190,7 @@ void createMem(int size) {
     }
 }
 
-int translate(int local_addr) {
+inline int translate(int local_addr) {
     return local_addr << 2;
 }
 
@@ -249,10 +207,6 @@ Ptr createVar(const Type& t) {
     pthread_mutex_unlock(&symTable->mutex);
     stack->push(local_addr);
     return Ptr(t, translate(local_addr));
-}
-
-inline Type getType(const Ptr& p) {
-    return p.type;
 }
 
 void getVar(const Ptr& p, void* val) {

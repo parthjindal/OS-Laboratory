@@ -11,37 +11,27 @@
 
 #include "debug.h"
 
+#define GC_PERIOD_MS 100
 #define MAX_SYMBOLS 1024
 #define MAX_STACK_SIZE 1024
 
-class Type {
-   public:
-    enum TypeEnum {
-        INT,
-        CHAR,
-        MEDIUM_INT,
-        BOOL,
-        ARRAY
-    };
-    TypeEnum type;
-    Type(TypeEnum _type) : type(_type) {}
-    Type(const Type& other) : type(other.type) {}
-    virtual ~Type() {}
+enum Type {
+    INT,
+    CHAR,
+    MEDIUM_INT,
+    BOOL,
+    ARRAY
 };
-
-class ArrType : public Type {
-   public:
-    Type base;
-    int width;
-    ArrType(int _width, const Type::TypeEnum& _base) : Type(Type::ARRAY), base(_base), width(_width) {}
-};
-
-int getSize(const Type& type);
 
 struct Ptr {
-    Type t;
+    Type type;
     int addr;
-    Ptr(const Type& _t, int _addr) : t(_t), addr(_addr) {}
+    Ptr(const Type& _t, int _addr) : type(_t), addr(_addr) {}
+};
+
+struct ArrPtr : public Ptr {
+    int width;
+    ArrPtr(const Type& t, int _addr, int _width) : Ptr(t, _addr), width(_width) {}
 };
 
 // valid, mark bit fields are stored as LSB's
@@ -51,31 +41,39 @@ struct Symbol {
     unsigned int word1, word2;
 };
 
-class SymbolTable {
-   public:
-    int head, tail;
+struct SymbolTable {
+    unsigned int head, tail;
     Symbol symbols[MAX_SYMBOLS];
     int size;
     pthread_mutex_t mutex;
     void Init();
-    int alloc(int wordidx, int offset);
-    void free(int idx);
-    int getWordIdx(int idx);
-    int getOffset(int idx);
+    ~SymbolTable();
+    unsigned int alloc(unsigned int wordidx, unsigned int offset);
+    void free(unsigned int idx);
+    inline int getWordIdx(unsigned int idx) { return symbols[idx].word1 >> 1; }
+    inline int getOffset(unsigned int idx) { return symbols[idx].word2 >> 1; }
+    inline void setMarked(unsigned int idx) { symbols[idx].word2 |= 1; }     // mark as in use
+    inline void setUnmarked(unsigned int idx) { symbols[idx].word2 &= -2; }  // mark as free
+    inline void setAllocated(unsigned int idx) { symbols[idx].word1 |= 1; }  // mark as allocated
+    inline void setUnallocated(unsigned int idx) { symbols[idx].word1 &= -2; }
+    inline bool isMarked(unsigned int idx) { return symbols[idx].word2 & 1; }
+    inline bool isAllocated(unsigned int idx) { return symbols[idx].word1 & 1; }
+    int* getPtr(unsigned int idx);
 };
 
 struct Stack {
-    int top;
+    int _top;
     int _elems[MAX_STACK_SIZE];
     void Init();
     void push(int elem);
     int pop();
+    int top();
 };
 
-class MemBlock {
-   public:
+struct MemBlock {
     int *start, *end;
     int* mem;
+    pthread_mutex_t mutex;
     void Init(int _size);
     ~MemBlock();
     int getMem(int size);
@@ -83,12 +81,32 @@ class MemBlock {
     void freeBlock(int wordid);
 };
 
-typedef int medium_int;
+inline int translate(int local_addr) {
+    return local_addr << 2;
+}
 
+inline Type getType(const Ptr& p) {
+    return p.type;
+}
+
+int getSize(const Type& type);
 void createMem(int size);
 Ptr createVar(const Type& t);
+void getVar(const Ptr& p, void* val);
 void assignVar(const Ptr& p, int val);
-void assignVar(const Ptr& p, bool val);
-void assignVar(const Ptr& p, char val);
-void assignVar(const Ptr& p, medium_int val);
-
+void assignVar(const Ptr& p, bool f);
+void assignVar(const Ptr& p, char c);
+ArrPtr createArr(const Type& t, int width);
+void initScope();
+void endScope();
+void _freeElem(int local_addr);
+void freeElem(const Ptr& p);
+void gc_run();
+void* garbageCollector(void*);
+int getWordForIdx(Type t, int idx);
+int getOffsetForIdx(Type t, int idx);
+void assignArr(const ArrPtr& p, int idx, int val);
+void assignArr(const ArrPtr& p, int idx, char c);
+void assignArr(const ArrPtr& p, int idx, bool f);
+void getVar(const ArrPtr& p, int idx, void* _mem);
+void freeMem();
