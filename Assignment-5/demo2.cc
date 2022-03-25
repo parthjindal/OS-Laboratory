@@ -22,23 +22,28 @@ Ptr fibonacciProduct(Ptr k) {
         }
     }
     Ptr ans = createVar(Type::INT);
-    int res;
-    getVar(arr, val - 1, &res);
-    assignVar(ans, res);
+    int prod = 1;
+    for (int i = 0; i < val; i++) {
+        int a;
+        getVar(arr, i, &a);
+        prod *= a;
+    }
+    assignVar(ans, prod);
     return ans;
 }
 
 int main() {
-    // int arrt[10];
-    // arrt[0] = 1;
-    // arrt[1] = 1;
-    // for (int i = 2; i < 10; i++) {
-    //     arrt[i] = arrt[i - 1] + arrt[i - 2];
-    // }
-    // int prod = 1;
-    // for (int i = 0; i < 10; i++) {
-    //     prod *= arrt[i];
-    // }
+    int arrt[10];
+    arrt[0] = 1;
+    arrt[1] = 1;
+    for (int i = 2; i < 10; i++) {
+        arrt[i] = arrt[i - 1] + arrt[i - 2];
+    }
+    int prod = 1;
+    for (int i = 0; i < 10; i++) {
+        prod *= arrt[i];
+    }
+    cout << "Actual Product: " << prod << endl;
     createMem(250 * 1024 * 1024);  // 250MB
     initScope();
     Ptr x = createVar(Type::INT);
