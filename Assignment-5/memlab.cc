@@ -231,10 +231,10 @@ void createMem(int size) {
     symTable->Init();
     stack = (Stack*)((char*)tmem + sizeof(MemBlock) + sizeof(SymbolTable));
     stack->Init();
-    // int ret = pthread_create(&gcThread, nullptr, garbageCollector, nullptr);
-    // if (ret != 0) {
-    //     throw std::runtime_error("Error creating garbage collector thread");
-    // }
+    int ret = pthread_create(&gcThread, nullptr, garbageCollector, nullptr);
+    if (ret != 0) {
+        throw std::runtime_error("Error creating garbage collector thread");
+    }
 }
 
 Ptr createVar(const Type& t) {
@@ -271,21 +271,8 @@ void getVar(const Ptr& p, void* val) {
     }
 }
 
-// void getVar(const ArrPtr& p, int idx, void* _mem) {
-//     int local_addr = p.addr >> 2;  // TODO: write a function here
-//     if (!(symTable->isAllocated(local_addr) && symTable->isMarked(local_addr)))
-//         throw std::runtime_error("Variable not in symbol table");
-//     PTHREAD_MUTEX_LOCK(&mem->mutex);
-//     int* ptr = symTable->getPtr(local_addr);
-//     int word = getWordForIdx(p.type, idx);
-//     int offset2 = getOffsetForIdx(p.type, idx);
-//     ptr = (int*)((char*)ptr + word * 4 + offset2);
-//     memcpy(_mem, (void*)ptr, getSize(p.type));
-//     PTHREAD_MUTEX_UNLOCK(&mem->mutex);
-// }
-
 void getVar(const ArrPtr& p, int idx, void* val) {
-    int local_addr = p.addr >> 2;  // TODO: write a function here
+    int local_addr = p.addr >> 2;  
     if (!(symTable->isAllocated(local_addr) && symTable->isMarked(local_addr)))
         throw std::runtime_error("Variable not in symbol table");
     if(idx < 0 || idx >= p.width)
@@ -295,9 +282,7 @@ void getVar(const ArrPtr& p, int idx, void* val) {
     int word = getWordForIdx(p.type, idx);
     int offset = getOffsetForIdx(p.type, idx);
     int* arr = (int*)((char*)ptr + word * 4 + offset);
-    // cout << "For index " << idx << " accessing " << arr - mem->start << endl;
-    // cout << "For index " << idx << " accessing " << arr << endl;
-    memcpy(val, arr, getSize(p.type));
+    memcpy(val, (void*)arr, getSize(p.type));
     int temp = *(int*)arr;
     PTHREAD_MUTEX_UNLOCK(&mem->mutex);
     if (p.type == Type::MEDIUM_INT) {
@@ -484,7 +469,6 @@ void compactMem() {
     while (p < mem->end) {
         *(p + (*p >> 1) - 1) = *p;
         p = p + (*p >> 1);
-    freeMem();
     }
     mem->biggestFreeBlockSize = mem->totalFreeMem;
     mem->totalFreeBlocks = 1;
@@ -616,8 +600,6 @@ void assignArr(const ArrPtr& p, bool arr[], int n) {
     PTHREAD_MUTEX_UNLOCK(&mem->mutex);
 }
 
-
-
 void testMemBlock() {
     MemBlock* mem = new MemBlock();
     mem->Init(1024 * 1024);  // 1 MB
@@ -692,10 +674,10 @@ void testAssignVar() {
 }
 
 void freeMem() {
-    pthread_cancel(gcThread);
     delete mem;
     delete symTable;
     delete stack;
+    exit(0);
 }
 
 void testCode() {
@@ -761,6 +743,7 @@ void testCompaction() {
 
 void testCompactionCall() {
     createMem(136);
+    initScope();
     Ptr p1 = createVar(Type::INT);
     Ptr p2 = createVar(Type::INT);
     ArrPtr arr1 = createArr(Type::INT, 8);
@@ -769,8 +752,8 @@ void testCompactionCall() {
     ArrPtr arr2 = createArr(Type::INT, 6);
     freeElem(arr1);
     ArrPtr arr3 = createArr(Type::INT, 6);
+    usleep(200 * 1000);
     // gc_run();
-    compactMem();
     int* ptr1 = symTable->getPtr(p1.addr >> 2);
     cout << "ptr1:" << ptr1 - mem->start << endl;
     int* ptr2 = symTable->getPtr(p2.addr >> 2);
@@ -786,6 +769,8 @@ void testCompactionCall() {
     cout << "Total free memory: " << mem->totalFreeMem << endl;
     cout << "Total free blocks: " << mem->totalFreeBlocks << endl;
     cout << "Biggest free block: " << mem->biggestFreeBlockSize << endl;
+    endScope();
+    usleep(100 * 1000);
 }
 
 void testAssignArr() {
@@ -794,13 +779,16 @@ void testAssignArr() {
     ArrPtr arr1 = createArr(Type::INT, 10);
     int arr[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
     assignArr(arr1, arr, 10);
+    cout << "arr1: " << arr1.addr << endl;
     for(int i = 0; i < 10; i++) {
         int val;
+        cout << "arr[" << i << "]: ";
         getVar(arr1, i, &val);
-        cout << val << " ";
+        cout << val << endl;
     }
-    sleep(100);
+    // sleep(100);
     endScope();
+    freeMem();
 }
 
 int main() {
@@ -809,8 +797,8 @@ int main() {
     // testAssignVar();
     // testCode();
     // testCompaction();
-    // testCompactionCall();
-    testAssignArr();
+    testCompactionCall();
+    // testAssignArr();
     // ArrType a = ArrType(10, Type::INT);
     // Type t = a;
     // const ArrType& x = static_cast<const ArrType&>(t);
@@ -818,9 +806,9 @@ int main() {
 
 /**
  * TODO LIST:
- * 1. Write assignArr when an array needs to be copied
- * 2. Do locking in compaction
- * 3. Write a compaction initialisation scheme
+ * Done 1. Write assignArr when an array needs to be copied
+ * Done 2. Do locking in compaction
+ * Done 3. Write a compaction initialisation scheme
  * 4. Write print statements as mentioned in the assignment pdf
  * 5. Write demo2 file and test everything together
  * 6. Write documentation
