@@ -674,9 +674,12 @@ void testAssignVar() {
 }
 
 void freeMem() {
-    delete mem;
-    delete symTable;
-    delete stack;
+    pthread_mutex_destroy(&mem->mutex);
+    pthread_mutex_destroy(&symTable->mutex);
+    free(mem->start);
+    free(mem);
+    free(symTable);
+    free(stack);
     exit(0);
 }
 
@@ -771,6 +774,7 @@ void testCompactionCall() {
     cout << "Biggest free block: " << mem->biggestFreeBlockSize << endl;
     endScope();
     usleep(100 * 1000);
+    freeMem();
 }
 
 void testAssignArr() {
