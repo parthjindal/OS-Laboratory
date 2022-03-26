@@ -19,8 +19,10 @@ void randArr(Ptr x, Ptr y) {
         // getVar(p2, &c);
         assignArr(arr, i, c);
         endScope();
+        gcActivate();
     }
-    freeElem(arr);
+    freeElem(arr);      
+    gcActivate();
 }
 
 int main() {

@@ -1,6 +1,7 @@
 #include "memlab.h"
 
 #include <pthread.h>
+#include <signal.h>
 #include <stdlib.h>
 #include <unistd.h>
 
@@ -74,7 +75,7 @@ void SymbolTable::Init() {
 }
 
 SymbolTable::~SymbolTable() {
-    pthread_mutex_destroy(&mutex);
+    // pthread_mutex_destroy(&mutex);
 }
 
 int SymbolTable::alloc(unsigned int wordidx, unsigned int offset) {
@@ -145,8 +146,8 @@ void MemBlock::Init(int _size) {
 }
 
 MemBlock::~MemBlock() {
-    free(mem);
     pthread_mutex_destroy(&mutex);
+    free(start);
 }
 
 int MemBlock::getMem(int size) {  // size in bytes (4 bytes aligned)
@@ -196,10 +197,6 @@ void MemBlock::addBlock(int* ptr, int size) {
         biggestFreeBlockSize -= words;
     }
     biggestFreeBlockSize = max(biggestFreeBlockSize, totalFreeMem / (totalFreeBlocks + 1));
-    cout << "Total free memory: " << totalFreeMem << endl;
-    cout << "Total free blocks: " << totalFreeBlocks << endl;
-    cout << "Biggest free block: " << biggestFreeBlockSize << endl;
-    cout << endl;
 }
 
 void MemBlock::freeBlock(int wordid) {
@@ -226,22 +223,16 @@ void MemBlock::freeBlock(int wordid) {
     }
     biggestFreeBlockSize = max(biggestFreeBlockSize, words);
     biggestFreeBlockSize = max(biggestFreeBlockSize, totalFreeMem / (totalFreeBlocks + 1));
-    cout << "Total free memory: " << totalFreeMem << endl;
-    cout << "Total free blocks: " << totalFreeBlocks << endl;
-    cout << "Biggest free block: " << biggestFreeBlockSize << endl;
-    cout << endl;
 }
 
 void createMem(int size) {
     if (mem != nullptr)
         throw std::runtime_error("Memory already created");
-    size_t t = sizeof(MemBlock) + sizeof(SymbolTable) + sizeof(Stack);
-    void* tmem = malloc(t);
-    mem = (MemBlock*)tmem;
+    mem = new MemBlock();
     mem->Init(size);
-    symTable = (SymbolTable*)((char*)tmem + sizeof(MemBlock));
+    symTable = new SymbolTable();
     symTable->Init();
-    stack = (Stack*)((char*)tmem + sizeof(MemBlock) + sizeof(SymbolTable));
+    stack = new Stack();
     stack->Init();
     int ret = pthread_create(&gcThread, nullptr, garbageCollector, nullptr);
     if (ret != 0) {
@@ -404,6 +395,9 @@ void freeElem(const Ptr& p) {
 
 void gc_run() {
     cout << "GC running" << endl;
+    cout << "Total free memory: " << mem->totalFreeMem << endl;
+    cout << "Total free blocks: " << mem->totalFreeBlocks << endl;
+    cout << "Biggest free block: " << mem->biggestFreeBlockSize << endl;
     for (int i = 0; i < MAX_SYMBOLS; i++) {
         PTHREAD_MUTEX_LOCK(&mem->mutex);
         PTHREAD_MUTEX_LOCK(&symTable->mutex);
@@ -489,11 +483,25 @@ void compactMem() {
     mem->totalFreeBlocks = 1;
 }
 
+void handlSigUSR1(int sig) {
+    gc_run();
+}
+
 void* garbageCollector(void*) {
+    signal(SIGUSR1, handlSigUSR1);
+    sigset_t set;
+    sigemptyset(&set);
+    sigaddset(&set, SIGUSR1);
     while (true) {
-        gc_run();
         usleep(GC_PERIOD_MS * 1000);
+        pthread_sigmask(SIG_BLOCK, &set, NULL);
+        gc_run();
+        pthread_sigmask(SIG_UNBLOCK, &set, NULL);
     }
+}
+
+void gcActivate() {
+    pthread_kill(gcThread, SIGUSR1);
 }
 
 int getWordForIdx(Type t, int idx) {
@@ -695,14 +703,13 @@ void testAssignVar() {
     getVar(p4, &c);
     cout << c << endl;
 }
-// todo :
+
 void freeMem() {
-    pthread_mutex_destroy(&mem->mutex);
-    pthread_mutex_destroy(&symTable->mutex);
-    free(mem->start);
-    free(mem);
-    free(symTable);
-    free(stack);
+    PTHREAD_MUTEX_LOCK(&mem->mutex);
+    PTHREAD_MUTEX_LOCK(&symTable->mutex);
+    delete mem;
+    delete symTable;
+    delete stack;
     exit(0);
 }
 
@@ -843,18 +850,18 @@ void testAssignArr() {
     // freeMem();
 }
 
-int main() {
-    // // testSymbolTable();Type(Type::INT)
-    // // testCreateVar();
-    // testAssignVar();
-    // testCode();
-    // testCompaction();
-    // testCompactionCall();
-    testAssignArr();
-    // ArrType a = ArrType(10, Type::INT);
-    // Type t = a;
-    // const ArrType& x = static_cast<const ArrType&>(t);
-}
+// int main() {
+//     // // testSymbolTable();Type(Type::INT)
+//     // // testCreateVar();
+//     // testAssignVar();
+//     // testCode();
+//     // testCompaction();
+//     // testCompactionCall();
+//     testAssignArr();
+//     // ArrType a = ArrType(10, Type::INT);
+//     // Type t = a;
+//     // const ArrType& x = static_cast<const ArrType&>(t);
+// }
 
 /**
  * TODO LIST:

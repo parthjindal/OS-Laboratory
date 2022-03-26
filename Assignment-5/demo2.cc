@@ -3,7 +3,8 @@
 #include "memlab.h"
 using namespace std;
 
-Ptr fibonacciProduct(Ptr k) {
+int fibonacciProduct(Ptr k) {
+    initScope();
     int val;
     getVar(k, &val);
     ArrPtr arr = createArr(Type::INT, val);
@@ -20,16 +21,15 @@ Ptr fibonacciProduct(Ptr k) {
             assignArr(arr, i, a + b);
         }
     }
-    Ptr ans = createVar(Type::INT);
     int prod = 1;
     for (int i = 0; i < val; i++) {
         int a;
         getVar(arr, i, &a);
         prod *= a;
     }
-    assignVar(ans, prod);
-    gc_run();
-    return ans;
+    endScope();
+    gcActivate();
+    return prod;
 }
 
 int main() {
@@ -45,16 +45,15 @@ int main() {
     }
     cout << "Actual Product: " << prod << endl;
     createMem(250 * 1024 * 1024);  // 250MB
+    sleep(1);
     initScope();
     Ptr x = createVar(Type::INT);
     assignVar(x, 10);
-    Ptr y = fibonacciProduct(x);
-    int val;
-    getVar(y, &val);
+    int val = fibonacciProduct(x);
     cout << "Final Product: " << val << endl;
     endScope();
-    // sleep(10);
     // usleep(200 * 1000);
-    gc_run();
+    gcActivate();
+    sleep(1);
     freeMem();
 }
