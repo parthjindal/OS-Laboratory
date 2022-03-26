@@ -1,5 +1,6 @@
 #ifndef _MEM_LAB_H
 #define _MEM_LAB_H
+
 #include <pthread.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -13,9 +14,9 @@
 
 #include "debug.h"
 
-#define GC_PERIOD_MS 1000000
-#define MAX_SYMBOLS (1 << 20)
-#define MAX_STACK_SIZE (1 << 20)
+#define GC_PERIOD_MS 100
+#define MAX_SYMBOLS 1024
+#define MAX_STACK_SIZE 1024
 
 enum Type {
     INT,
@@ -48,7 +49,7 @@ struct SymbolTable {
     Symbol symbols[MAX_SYMBOLS];
     int size;
     pthread_mutex_t mutex;
-    void Init();
+    SymbolTable();
     ~SymbolTable();
     int alloc(unsigned int wordidx, unsigned int offset);
     void free(unsigned int idx);
@@ -66,7 +67,7 @@ struct SymbolTable {
 struct Stack {
     int _top;
     int _elems[MAX_STACK_SIZE];
-    void Init();
+    Stack();
     void push(int elem);
     int pop();
     int top();
@@ -86,14 +87,6 @@ struct MemBlock {
     void freeBlock(int wordid);
 };
 
-inline int translate(int local_addr) {
-    return local_addr << 2;
-}
-
-inline Type getType(const Ptr& p) {
-    return p.type;
-}
-
 int getSize(const Type& type);
 void createMem(int size);
 Ptr createVar(const Type& t);
@@ -104,14 +97,8 @@ void assignVar(const Ptr& p, char c);
 ArrPtr createArr(const Type& t, int width);
 void initScope();
 void endScope();
-void _freeElem(int local_addr);
 void freeElem(const Ptr& p);
-void calcOffset();
-void updateSymbolTable();
-void compactMem();
 void* garbageCollector(void*);
-int getWordForIdx(Type t, int idx);
-int getOffsetForIdx(Type t, int idx);
 void assignArr(const ArrPtr& p, int idx, int val);
 void assignArr(const ArrPtr& p, int idx, char c);
 void assignArr(const ArrPtr& p, int idx, bool f);
