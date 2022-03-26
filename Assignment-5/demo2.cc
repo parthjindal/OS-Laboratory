@@ -4,7 +4,6 @@
 using namespace std;
 
 Ptr fibonacciProduct(Ptr k) {
-    initScope();
     int val;
     getVar(k, &val);
     ArrPtr arr = createArr(Type::INT, val);
@@ -29,6 +28,7 @@ Ptr fibonacciProduct(Ptr k) {
         prod *= a;
     }
     assignVar(ans, prod);
+    gc_run();
     return ans;
 }
 
@@ -54,6 +54,7 @@ int main() {
     cout << "Final Product: " << val << endl;
     endScope();
     // sleep(10);
-    usleep(200 * 1000);
+    // usleep(200 * 1000);
+    gc_run();
     freeMem();
 }
