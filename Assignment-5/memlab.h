@@ -2,6 +2,7 @@
 #define _MEM_LAB_H
 
 #include <pthread.h>
+#include <semaphore.h>
 #include <stdlib.h>
 #include <unistd.h>
 
@@ -14,9 +15,12 @@
 
 #include "debug.h"
 
-#define GC_PERIOD_MS 100
+#define GC_PERIOD_US 1
 #define MAX_SYMBOLS 1024
 #define MAX_STACK_SIZE 1024
+#define INT24_MAX 0x7fffff
+#define INT24_MIN -0x800000
+#define COMPACT_THRESHOLD 3.1
 
 enum Type {
     INT,
@@ -88,7 +92,7 @@ struct MemBlock {
 };
 
 int getSize(const Type& type);
-void createMem(int size);
+void createMem(int size, bool gc = true);
 Ptr createVar(const Type& t);
 void getVar(const Ptr& p, void* val);
 void assignVar(const Ptr& p, int val);
@@ -105,5 +109,8 @@ void assignArr(const ArrPtr& p, int idx, bool f);
 void getVar(const ArrPtr& p, int idx, void* _mem);
 void freeMem();
 void gcActivate();
+void gc_run();
+void debugPrint(FILE* fp = stdout);
+void compactMem();
 
 #endif  // _MEM_LAB_H

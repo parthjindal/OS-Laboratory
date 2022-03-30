@@ -15,11 +15,13 @@
 #include "debug.h"
 using namespace std;
 
+bool gc_active = false;
 pthread_t gcThread;
 
 MemBlock* mem = nullptr;
-Stack* stack;
-SymbolTable* symTable;
+Stack* stack = nullptr;
+SymbolTable* symTable = nullptr;
+sem_t sem_gc;
 
 int getSize(const Type& type) {
     switch (type) {
@@ -40,13 +42,15 @@ int getSize(const Type& type) {
 }
 
 int getWordForIdx(Type t, int idx) {
-    int _count = (1 << 2) / getSize(t);
+    int wordsize = t == Type::BOOL ? 32 : 4;
+    int _count = wordsize / getSize(t);
     int _idx = idx / _count;
     return _idx;
 }
 
 int getOffsetForIdx(Type t, int idx) {
-    int _count = (1 << 2) / getSize(t);
+    int wordsize = t == Type::BOOL ? 32 : 4;
+    int _count = wordsize / getSize(t);
     int _idx = idx / _count;
     return (idx - _idx * _count) * getSize(t);
 }
@@ -61,10 +65,7 @@ SymbolTable::SymbolTable() {
         symbols[i].word2 = ((i + 1)) << 1;
     }
     symbols[tail].word2 = -2;  // mark end of free list
-    pthread_mutexattr_t attr;
-    pthread_mutexattr_init(&attr);
-    pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_ERRORCHECK_NP);
-    pthread_mutex_init(&mutex, &attr);
+    pthread_mutex_init(&mutex, nullptr);
 }
 
 SymbolTable::~SymbolTable() {
@@ -125,8 +126,11 @@ int Stack::top() {
     return _elems[_top];
 }
 
-inline int translate(int local_addr) {
+inline int translate2La(int local_addr) {
     return local_addr << 2;
+}
+inline int translate2Idx(int local_addr) {
+    return local_addr >> 2;
 }
 
 void MemBlock::Init(int _size) {
@@ -216,16 +220,32 @@ void MemBlock::freeBlock(int wordid) {
     LOG("MemBlock", _COLOR_BLUE, "Freed %d bytes at address: %d\n", orig_words << 2, wordid << 2);
 }
 
-void createMem(int size) {
+void debugPrint(FILE* fp) {
+    PTHREAD_MUTEX_LOCK(&mem->mutex);
+    int* p = mem->start;
+    while (p < mem->end) {
+        fprintf(fp, "%d, %d, %d\n", (int)(p - mem->start) << 2, ((int)(p - mem->start) << 2) + ((*p >> 1) << 2), *p & 1);
+        p = p + (*p >> 1);
+    }
+    fprintf(fp, "total free memory: %d, biggest free hole: %d\n", mem->totalFreeMem, mem->biggestFreeBlockSize);
+    PTHREAD_MUTEX_UNLOCK(&mem->mutex);
+}
+
+void createMem(int size, bool gc) {
     if (mem != nullptr)
         throw std::runtime_error("Memory already created");
     mem = new MemBlock();
     mem->Init(size);
     symTable = new SymbolTable();
     stack = new Stack();
-    int ret = pthread_create(&gcThread, nullptr, garbageCollector, nullptr);
-    if (ret != 0) {
-        throw std::runtime_error("Error creating garbage collector thread");
+    if (gc) {
+        sem_init(&sem_gc, 0, 0);
+        int ret = pthread_create(&gcThread, nullptr, garbageCollector, nullptr);
+        if (ret != 0) {
+            throw std::runtime_error("Error creating garbage collector thread");
+        }
+        sem_wait(&sem_gc);
+        gc_active = true;
     }
 }
 
@@ -234,8 +254,14 @@ Ptr createVar(const Type& t) {
     _size = (((_size + 3) >> 2) << 2);
     PTHREAD_MUTEX_LOCK(&mem->mutex);
     int wordid = mem->getMem(_size);
-    if (wordid == -1)
-        throw std::runtime_error("Out of memory");
+    if (wordid == -1) {
+        PTHREAD_MUTEX_LOCK(&symTable->mutex);
+        compactMem();
+        PTHREAD_MUTEX_UNLOCK(&symTable->mutex);
+        wordid = mem->getMem(_size);
+        if (wordid == -1)
+            throw std::runtime_error("Out of memory");
+    }
     PTHREAD_MUTEX_LOCK(&symTable->mutex);
     int local_addr = symTable->alloc(wordid, 0);
     if (local_addr == -1)
@@ -243,17 +269,24 @@ Ptr createVar(const Type& t) {
     PTHREAD_MUTEX_UNLOCK(&symTable->mutex);
     PTHREAD_MUTEX_UNLOCK(&mem->mutex);
     stack->push(local_addr);
-    return Ptr(t, translate(local_addr));
+    return Ptr(t, translate2La(local_addr));
 }
 
 ArrPtr createArr(const Type& t, int width) {
-    int _count = (1 << 2) / getSize(t);
+    int wordsize = t == Type::BOOL ? 32 : 4;
+    int _count = wordsize / getSize(t);
     int _width = (width + _count - 1) / _count;  // round up
     int _size = _width << 2;
     PTHREAD_MUTEX_LOCK(&mem->mutex);
     int wordid = mem->getMem(_size);
-    if (wordid == -1)
-        throw std::runtime_error("Out of memory");
+    if (wordid == -1) {
+        PTHREAD_MUTEX_LOCK(&symTable->mutex);
+        compactMem();
+        PTHREAD_MUTEX_UNLOCK(&symTable->mutex);
+        wordid = mem->getMem(_size);
+        if (wordid == -1)
+            throw std::runtime_error("Out of memory");
+    }
     PTHREAD_MUTEX_LOCK(&symTable->mutex);
     int local_addr = symTable->alloc(wordid, 0);
     if (local_addr == -1)
@@ -261,11 +294,11 @@ ArrPtr createArr(const Type& t, int width) {
     PTHREAD_MUTEX_UNLOCK(&symTable->mutex);
     PTHREAD_MUTEX_UNLOCK(&mem->mutex);
     stack->push(local_addr);
-    return ArrPtr(t, translate(local_addr), width);
+    return ArrPtr(t, translate2La(local_addr), width);
 }
 
 void getVar(const Ptr& p, void* val) {
-    int local_addr = p.addr >> 2;  // TODO: write a function here
+    int local_addr = translate2Idx(p.addr);
     if (!(symTable->isAllocated(local_addr) && symTable->isMarked(local_addr)))
         throw std::runtime_error("Variable not in symbol table");
     PTHREAD_MUTEX_LOCK(&mem->mutex);
@@ -275,10 +308,8 @@ void getVar(const Ptr& p, void* val) {
         if (temp & (1 << 23)) {
             temp = temp | 0xFF000000;
         }
-    }
-    if (p.type == Type::MEDIUM_INT)
         memcpy(val, &temp, 4);
-    else
+    } else
         memcpy(val, &temp, getSize(p.type));
     PTHREAD_MUTEX_UNLOCK(&mem->mutex);
 }
@@ -293,14 +324,17 @@ void getVar(const ArrPtr& p, int idx, void* val) {
     int* ptr = symTable->getPtr(local_addr);
     int word = getWordForIdx(p.type, idx);
     int offset = getOffsetForIdx(p.type, idx);
-    int* arr = ptr + word;
-    int temp = *(int*)arr;
-    if (p.type == Type::MEDIUM_INT) {
+    ptr = ptr + word;
+    int temp = *ptr;
+    if (p.type == Type::BOOL) {
+        bool b = temp & (1 << offset);
+        memcpy(val, &b, 1);
+    } else if (p.type == Type::MEDIUM_INT) {
         if (temp & (1 << 23)) {
             temp = temp | 0xFF000000;
         }
-    }
-    if (p.type == Type::MEDIUM_INT)
+        memcpy(val, &temp, 4);
+    } else if (p.type == Type::INT)
         memcpy(val, &temp, 4);
     else
         memcpy(val, (char*)&temp + offset, getSize(p.type));
@@ -308,19 +342,22 @@ void getVar(const ArrPtr& p, int idx, void* val) {
 }
 
 void assignVar(const Ptr& p, int val) {
-    int local_addr = p.addr >> 2;  // TODO: write a function here
+    int local_addr = translate2Idx(p.addr);
     if (!(symTable->isAllocated(local_addr) && symTable->isMarked(local_addr)))
         throw std::runtime_error("Variable not in symbol table");
     if (p.type != Type::INT && p.type != Type::MEDIUM_INT)
         throw std::runtime_error("Assignment to non-int variable");
     PTHREAD_MUTEX_LOCK(&mem->mutex);
     int* ptr = symTable->getPtr(local_addr);
+    if (p.type == Type::MEDIUM_INT) {
+        val = val & 0x00FFFFFF;
+    }
     memcpy((void*)ptr, &val, 4);
     PTHREAD_MUTEX_UNLOCK(&mem->mutex);
 }
 
 void assignVar(const Ptr& p, bool f) {
-    int local_addr = p.addr >> 2;  // TODO: write a function here
+    int local_addr = translate2Idx(p.addr);
     if (!(symTable->isAllocated(local_addr) && symTable->isMarked(local_addr)))
         throw std::runtime_error("Variable not in symbol table");
     if (p.type != Type::BOOL)
@@ -333,7 +370,7 @@ void assignVar(const Ptr& p, bool f) {
 }
 
 void assignVar(const Ptr& p, char c) {
-    int local_addr = p.addr >> 2;  // TODO: write a function here
+    int local_addr = translate2Idx(p.addr);
     if (!(symTable->isAllocated(local_addr) && symTable->isMarked(local_addr)))
         throw std::runtime_error("Variable not in symbol table");
     if (p.type != Type::CHAR)
@@ -346,7 +383,7 @@ void assignVar(const Ptr& p, char c) {
 }
 
 void assignArr(const ArrPtr& p, int idx, int val) {
-    int local_addr = p.addr >> 2;  // TODO: write a function here
+    int local_addr = translate2Idx(p.addr);
     if (!(symTable->isAllocated(local_addr) && symTable->isMarked(local_addr)))
         throw std::runtime_error("Variable not in symbol table");
 
@@ -362,7 +399,7 @@ void assignArr(const ArrPtr& p, int idx, int val) {
 }
 
 void assignArr(const ArrPtr& p, int idx, char c) {
-    int local_addr = p.addr >> 2;  // TODO: write a function here
+    int local_addr = translate2Idx(p.addr);
     if (!(symTable->isAllocated(local_addr) && symTable->isMarked(local_addr)))
         throw std::runtime_error("Variable not in symbol table");
 
@@ -380,26 +417,25 @@ void assignArr(const ArrPtr& p, int idx, char c) {
 }
 
 void assignArr(const ArrPtr& p, int idx, bool f) {
-    int local_addr = p.addr >> 2;  // TODO: write a function here
+    int local_addr = translate2Idx(p.addr);
     if (!(symTable->isAllocated(local_addr) && symTable->isMarked(local_addr)))
         throw std::runtime_error("Variable not in symbol table");
-
     if (p.type != Type::BOOL)
         throw std::runtime_error("Assignment to non-bool array");
     PTHREAD_MUTEX_LOCK(&mem->mutex);
     int* ptr = symTable->getPtr(local_addr);
     int word = getWordForIdx(p.type, idx);
     int offset = getOffsetForIdx(p.type, idx);
-    ptr = (int*)((char*)ptr + word * 4);
+    ptr = ptr + word;
     int temp = *ptr;
-    memcpy((char*)&temp + offset, &f, 1);
+    temp = temp & ~(1 << offset);
+    temp = temp | (f << offset);
     memcpy((void*)ptr, &temp, 4);
     PTHREAD_MUTEX_UNLOCK(&mem->mutex);
 }
 
 void assignArr(const ArrPtr& p, int arr[], int n) {
-    cout << "Assigning array" << endl;
-    int local_addr = p.addr >> 2;  // TODO: write a function here
+    int local_addr = translate2Idx(p.addr);
     if (!(symTable->isAllocated(local_addr) && symTable->isMarked(local_addr)))
         throw std::runtime_error("Variable not in symbol table");
     if (p.type != Type::INT && p.type != Type::MEDIUM_INT)
@@ -410,43 +446,39 @@ void assignArr(const ArrPtr& p, int arr[], int n) {
     for (int i = 0; i < n; i++) {
         int word = getWordForIdx(p.type, i);
         int offset = getOffsetForIdx(p.type, i);
-        cout << "Word: " << word << " Offset: " << offset << endl;
         int* ptr_temp = (int*)((char*)ptr + word * 4 + offset);
         memcpy((void*)ptr_temp, &arr[i], 4);
     }
     PTHREAD_MUTEX_UNLOCK(&mem->mutex);
-    cout << "Done assigning array" << endl;
 }
 
 void assignArr(const ArrPtr& p, char arr[], int n) {
-    int local_addr = p.addr >> 2;
+    int local_addr = translate2Idx(p.addr);
     if (!(symTable->isAllocated(local_addr) && symTable->isMarked(local_addr)))
         throw std::runtime_error("Variable not in symbol table");
-
     if (p.type != Type::CHAR)
         throw std::runtime_error("Assignment to non-char array");
+
     PTHREAD_MUTEX_LOCK(&mem->mutex);
     int* ptr = symTable->getPtr(local_addr);
     for (int i = 0; i < n; i++) {
         int word = getWordForIdx(p.type, i);
         int offset = getOffsetForIdx(p.type, i);
-        cout << "word,offset,i " << word << " " << offset << " " << i << endl;
         int* ptr_temp = ptr + word;
         int temp = *ptr_temp;
         memcpy((char*)&temp + offset, &arr[i], 1);
-        cout << "Copied char: " << *((char*)&temp + offset) << endl;
         memcpy(ptr_temp, &temp, 4);
     }
     PTHREAD_MUTEX_UNLOCK(&mem->mutex);
 }
 
 void assignArr(const ArrPtr& p, bool arr[], int n) {
-    int local_addr = p.addr >> 2;
+    int local_addr = translate2Idx(p.addr);
     if (!(symTable->isAllocated(local_addr) && symTable->isMarked(local_addr)))
         throw std::runtime_error("Variable not in symbol table");
-
     if (p.type != Type::BOOL)
         throw std::runtime_error("Assignment to non-bool array");
+
     PTHREAD_MUTEX_LOCK(&mem->mutex);
     int* ptr = symTable->getPtr(local_addr);
     for (int i = 0; i < n; i++) {
@@ -454,7 +486,8 @@ void assignArr(const ArrPtr& p, bool arr[], int n) {
         int offset = getOffsetForIdx(p.type, i);
         int* ptr_temp = ptr + word;
         int temp = *ptr_temp;
-        memcpy((char*)&temp + offset, &arr[i], 1);
+        temp = temp & ~(1 << offset);
+        temp = temp | (arr[i] << offset);
         memcpy((void*)ptr_temp, &temp, 4);
     }
     PTHREAD_MUTEX_UNLOCK(&mem->mutex);
@@ -476,7 +509,6 @@ void endScope() {
 }
 
 void _freeElem(int local_addr) {
-    cout << gettid() << " freeing " << local_addr << endl;
     int wordId = symTable->getWordIdx(local_addr);
     mem->freeBlock(wordId);
     symTable->free(local_addr);
@@ -496,7 +528,6 @@ void freeElem(const Ptr& p) {
 }
 
 void calcOffset() {
-    cout << "Calculating offset" << endl;
     int* p = mem->start;
     int offset = 0;
     while (p < mem->end) {
@@ -504,27 +535,22 @@ void calcOffset() {
             offset += (*p >> 1);
         } else {
             *(p + (*p >> 1) - 1) = (((p - offset) - mem->start) << 1) | 1;
-            cout << "offset for: " << p - mem->start << " is " << (*(p + (*p >> 1) - 1) >> 1) << endl;
-            cout << "offsetval: " << offset << endl;
         }
         p = p + (*p >> 1);
     }
 }
 
 void updateSymbolTable() {
-    cout << "Updating symbol table" << endl;
     for (int i = 0; i < MAX_SYMBOLS; i++) {
         if (symTable->isAllocated(i)) {
             int* p = symTable->getPtr(i) - 1;
             int newWordId = *(p + (*p >> 1) - 1) >> 1;
-            cout << "i, newWordId: " << i << " " << newWordId << endl;
             symTable->symbols[i].word1 = (newWordId << 1) | 1;
         }
     }
 }
 
 void compactMem() {
-    cout << "Compacting memory" << endl;
     calcOffset();
     updateSymbolTable();
     int* p = mem->start;
@@ -559,20 +585,16 @@ void compactMem() {
 }
 
 void gc_run() {
+    PTHREAD_MUTEX_LOCK(&mem->mutex);
+    PTHREAD_MUTEX_LOCK(&symTable->mutex);
     for (int i = 0; i < MAX_SYMBOLS; i++) {
-        PTHREAD_MUTEX_LOCK(&mem->mutex);
-        PTHREAD_MUTEX_LOCK(&symTable->mutex);
         if (symTable->isAllocated(i) && !symTable->isMarked(i)) {
             _freeElem(i);
         }
-        PTHREAD_MUTEX_UNLOCK(&symTable->mutex);
-        PTHREAD_MUTEX_UNLOCK(&mem->mutex);
     }
-    PTHREAD_MUTEX_LOCK(&mem->mutex);
-    PTHREAD_MUTEX_LOCK(&symTable->mutex);
     mem->totalFreeMem = max(mem->totalFreeMem, 1);
     double free_ratio = (double)mem->totalFreeMem / (double)(mem->biggestFreeBlockSize);
-    if (free_ratio >= 2) {
+    if (free_ratio >= COMPACT_THRESHOLD) {
         compactMem();
     }
     PTHREAD_MUTEX_UNLOCK(&symTable->mutex);
@@ -585,11 +607,12 @@ void handlSigUSR1(int sig) {
 
 void* garbageCollector(void*) {
     signal(SIGUSR1, handlSigUSR1);
+    sem_post(&sem_gc);
     sigset_t set;
     sigemptyset(&set);
     sigaddset(&set, SIGUSR1);
     while (true) {
-        usleep(GC_PERIOD_MS * 1000);
+        usleep(GC_PERIOD_US);
         pthread_sigmask(SIG_BLOCK, &set, NULL);
         gc_run();
         pthread_sigmask(SIG_UNBLOCK, &set, NULL);
@@ -597,7 +620,8 @@ void* garbageCollector(void*) {
 }
 
 void gcActivate() {
-    pthread_kill(gcThread, SIGUSR1);
+    if (gc_active)
+        pthread_kill(gcThread, SIGUSR1);
 }
 
 void testMemBlock() {
@@ -656,7 +680,7 @@ void testAssignVar() {
          << endl;
     assignVar(p1, 123);
     assignVar(p2, false);
-    assignVar(p3, -123);
+    assignVar(p3, INT24_MAX + 1);
     assignVar(p4, 'z');
     int val;
     getVar(p1, &val);
@@ -670,15 +694,25 @@ void testAssignVar() {
     char c;
     getVar(p4, &c);
     cout << c << endl;
+    freeMem();
 }
 
 void freeMem() {
     PTHREAD_MUTEX_LOCK(&mem->mutex);
     PTHREAD_MUTEX_LOCK(&symTable->mutex);
+    if (gc_active) {
+        pthread_cancel(gcThread);
+        gc_active = false;
+        sem_destroy(&sem_gc);
+    }
+    pthread_mutex_destroy(&mem->mutex);
+    pthread_mutex_destroy(&symTable->mutex);
     delete mem;
     delete symTable;
     delete stack;
-    exit(0);
+    mem = NULL;
+    symTable = NULL;
+    stack = NULL;
 }
 
 void testCode() {
@@ -702,7 +736,7 @@ void testCode() {
     p3 = createVar(Type::MEDIUM_INT);
     p4 = createVar(Type::CHAR);
     endScope();
-    sleep(100);
+    usleep(100 * 1000);
     freeMem();
 }
 
@@ -778,13 +812,13 @@ void testCompactionCall() {
 void testAssignArr() {
     createMem(1024 * 1024 * 512);  // 512 MB
     initScope();
-    ArrPtr arr1 = createArr(Type::BOOL, 10);
+    ArrPtr arr1 = createArr(Type::BOOL, 33);
     // int arr[] = {1, 2, 3, 4, 5, 6, -7, -8, -9, -10};
     // char arr[] = {'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'};
-    bool arr[] = {true, false, true, false, true, false, true, false, true, false};
+    bool arr[] = {true, true, true, false, true, false, true, false, true, false};
     assignArr(arr1, arr, 10);
     cout << "arr1: " << arr1.addr << endl;
-    for (int i = 0; i < 10; i++) {
+    for (int i = 0; i < 33; i++) {
         bool val;
         cout << "arr[" << i << "]: ";
         getVar(arr1, i, &val);
@@ -793,20 +827,12 @@ void testAssignArr() {
     freeElem(arr1);
     usleep(150 * 1000);
     int* p = mem->start;
-    cout << (*p >> 1) << " " << (*p & 1) << endl
-         << endl;
-    cout << (*(p + 4) >> 1) << " " << (*(p + 4) & 1) << endl
-         << endl;
-    cout << (*(p + 5) >> 1) << " " << (*(p + 5) & 1) << endl
-         << endl;
-    p = mem->end - 1;
-    cout << (*p >> 1) << " " << (*p & 1) << endl;
-    ArrPtr arr2 = createArr(Type::BOOL, 10);
+    ArrPtr arr2 = createArr(Type::BOOL, 33);
     for (int i = 0; i < 10; i++) {
         assignArr(arr2, i, arr[i]);
     }
     cout << "Array 2 starts here " << endl;
-    for (int i = 0; i < 10; i++) {
+    for (int i = 0; i < 33; i++) {
         bool val;
         cout << "arr[" << i << "]: ";
         getVar(arr2, i, &val);
@@ -815,29 +841,29 @@ void testAssignArr() {
     // sleep(100);
     endScope();
     sleep(1);
-    // freeMem();
+    freeMem();
+}
+
+void test2() {
+    createMem(100, false);
+    initScope();
+    ArrPtr p1 = createArr(Type::INT, 10);  // 48 bytes
+    Ptr p2 = createVar(Type::INT);         // 12 bytes
+    Ptr p3 = createVar(Type::INT);         // 12 bytes
 }
 
 // int main() {
 //     // // testSymbolTable();Type(Type::INT)
-//     // // testCreateVar();
+//     // testCreateVar();
 //     // testAssignVar();
-//     // testCode();
+//     testCode();
 //     // testCompaction();
 //     // testCompactionCall();
-//     testAssignArr();
-//     // ArrType a = ArrType(10, Type::INT);
-//     // Type t = a;
-//     // const ArrType& x = static_cast<const ArrType&>(t);
+//     // testAssignArr();
 // }
 
 /**
  * TODO LIST:
- * Done 1. Write assignArr when an array needs to be copied
- * Done 2. Do locking in compaction
- * Done 3. Write a compaction initialisation scheme
- * 4. Write print statements as mentioned in the assignment pdf
- * 5. Write demo2 file and test everything together
- * 6. Write documentation
- * 7. Complete freeMem() without seg fault
+ * extra memory
+ * use semaphore for
  */

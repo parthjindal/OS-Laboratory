@@ -45,7 +45,7 @@ int main() {
     }
     cout << "Actual Product: " << prod << endl;
     createMem(250 * 1024 * 1024);  // 250MB
-    sleep(1);
+    // sleep(1);
     initScope();
     Ptr x = createVar(Type::INT);
     assignVar(x, 10);
@@ -54,6 +54,6 @@ int main() {
     endScope();
     // usleep(200 * 1000);
     gcActivate();
-    sleep(1);
+    // sleep(1);
     freeMem();
 }
