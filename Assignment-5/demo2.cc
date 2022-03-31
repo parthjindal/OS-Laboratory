@@ -44,7 +44,7 @@ int main() {
         prod *= arrt[i];
     }
     cout << "Actual Product: " << prod << endl;
-    createMem(250 * 1024 * 1024);  // 250MB
+    createMem(250 * 1024 * 1024, true);  // 250MB
     // sleep(1);
     initScope();
     Ptr x = createVar(Type::INT);

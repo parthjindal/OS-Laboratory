@@ -4,7 +4,7 @@
 using namespace std;
 
 int main() {
-    createMem(392);
+    createMem(400 / 1.25, true);
     initScope();
     Ptr x = createVar(Type::INT);
     ArrPtr y = createArr(Type::INT, 10);
@@ -20,7 +20,6 @@ int main() {
     Ptr g = createVar(Type::INT);
     Ptr h = createVar(Type::CHAR);
     ArrPtr i = createArr(Type::INT, 12);
-
     freeElem(x);
     freeElem(z);
     freeElem(b);
@@ -33,9 +32,11 @@ int main() {
     // gcActivate();
     // Ptr l = createArr(Type::INT, 20);
     // sleep(1);
-    usleep(1);
+    usleep(10);
     Ptr m = createVar(Type::INT);
     debugPrint(stdout);
+    // cout << "m: " << m.addr << endl;
+    // sleep(1);
     endScope();
     freeMem();
 }

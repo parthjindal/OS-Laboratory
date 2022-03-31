@@ -14,10 +14,10 @@
 #include <vector>
 
 #include "debug.h"
+#include "medium_int.h"
 
-#define GC_PERIOD_US 1
-#define MAX_SYMBOLS 1024
-#define MAX_STACK_SIZE 1024
+#define GC_PERIOD_US 10
+#define EFFEC_MEM_RATIO 1.25
 #define INT24_MAX 0x7fffff
 #define INT24_MIN -0x800000
 #define COMPACT_THRESHOLD 3.1
@@ -50,10 +50,11 @@ struct Symbol {
 
 struct SymbolTable {
     unsigned int head, tail;
-    Symbol symbols[MAX_SYMBOLS];
+    Symbol* symbols;
     int size;
+    int capacity;
     pthread_mutex_t mutex;
-    SymbolTable();
+    SymbolTable(int _size);
     ~SymbolTable();
     int alloc(unsigned int wordidx, unsigned int offset);
     void free(unsigned int idx);
@@ -70,8 +71,10 @@ struct SymbolTable {
 
 struct Stack {
     int _top;
-    int _elems[MAX_STACK_SIZE];
-    Stack();
+    int* _elems;
+    int capacity;
+    Stack(int size);
+    ~Stack();
     void push(int elem);
     int pop();
     int top();
@@ -87,7 +90,7 @@ struct MemBlock {
     void Init(int _size);
     ~MemBlock();
     int getMem(int size);
-    void addBlock(int* ptr, int size);
+    void splitBlock(int* ptr, int size);
     void freeBlock(int wordid);
 };
 
@@ -96,6 +99,7 @@ void createMem(int size, bool gc = true);
 Ptr createVar(const Type& t);
 void getVar(const Ptr& p, void* val);
 void assignVar(const Ptr& p, int val);
+void assignVar(const Ptr& p, medium_int val);
 void assignVar(const Ptr& p, bool f);
 void assignVar(const Ptr& p, char c);
 ArrPtr createArr(const Type& t, int width);
@@ -104,8 +108,14 @@ void endScope();
 void freeElem(const Ptr& p);
 void* garbageCollector(void*);
 void assignArr(const ArrPtr& p, int idx, int val);
+void assignArr(const ArrPtr& p, int idx, medium_int val);
 void assignArr(const ArrPtr& p, int idx, char c);
 void assignArr(const ArrPtr& p, int idx, bool f);
+void assignArr(const ArrPtr& p, int arr[], int n);
+void assignArr(const ArrPtr& p, medium_int arr[], int n);
+void assignArr(const ArrPtr& p, char arr[], int n);
+void assignArr(const ArrPtr& p, bool arr[], int n);
+
 void getVar(const ArrPtr& p, int idx, void* _mem);
 void freeMem();
 void gcActivate();

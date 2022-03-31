@@ -1,4 +1,4 @@
-#define DEBUG_LEVEL 0
+#define DEBUG_LEVEL 4
 
 #define _INFO_L 1
 #define _DEBUG_L 2
