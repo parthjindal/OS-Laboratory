@@ -23,7 +23,14 @@ sem_t sem_gc;
 MemBlock* mem = nullptr;
 Stack* stack = nullptr;
 SymbolTable* symTable = nullptr;
+
+#if DEBUG_LEVEL >= _INFO_L
+#define GC_LOG
+#endif
+
+#ifdef GC_LOG
 FILE* logfile;
+#endif
 
 inline int translate2La(int local_addr) {
     return local_addr << 2;
@@ -249,7 +256,9 @@ int MemBlock::getMem(int size) {
     }
     // if free block found, split it into two blocks (allocate and free) if possible
     splitBlock((int*)p, newsize);
+#ifdef GC_LOG
     fprintf(logfile, "%ld\n", ((end - start) - totalFreeMem));
+#endif
     LOG("MemBlock", _COLOR_BLUE, "Alloc %d bytes at address: %d\n", newsize, (int)(p - start) << 2);
     return (p - start);
 }
@@ -312,7 +321,9 @@ void MemBlock::freeBlock(int wordid) {
     }
     biggestFreeBlockSize = max(biggestFreeBlockSize, words);
     biggestFreeBlockSize = max(biggestFreeBlockSize, totalFreeMem / (totalFreeBlocks + 1));
+#ifdef GC_LOG
     fprintf(logfile, "%ld\n", ((end - start) - totalFreeMem));
+#endif
     LOG("MemBlock", _COLOR_BLUE, "Freed %d bytes at address: %d\n", orig_words << 2, wordid << 2);
 }
 
@@ -331,8 +342,10 @@ void createMem(int size, bool gc) {
     symTable = new SymbolTable(symtable_size);
     stack = new Stack(symtable_size);
     string fname = gc ? "gc" : "non_gc";
+#ifdef GC_LOG
     logfile = fopen((fname + ".csv").c_str(), "w");
     fprintf(logfile, "%s\n", fname.c_str());
+#endif
     if (gc) {
         sem_init(&sem_gc, 0, 0);  // initialize semaphore for garbage collector
                                   // thread to perform initializations
@@ -986,7 +999,9 @@ void freeMem() {
     mem = NULL;
     symTable = NULL;
     stack = NULL;
+#ifdef GC_LOG
     fclose(logfile);
+#endif
     // cout << "Done" << endl;
 }
 
