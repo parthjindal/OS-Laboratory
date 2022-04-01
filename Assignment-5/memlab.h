@@ -16,7 +16,7 @@
 #include "debug.h"
 #include "medium_int.h"
 
-#define GC_PERIOD_US 10
+#define GC_PERIOD_US 20
 #define EFFEC_MEM_RATIO 1.25
 #define INT24_MAX 0x7fffff
 #define INT24_MIN -0x800000

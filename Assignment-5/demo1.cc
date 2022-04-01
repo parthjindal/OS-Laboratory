@@ -83,17 +83,17 @@ void test() {
     randArrBool(g, h);
     randArrInt(a, b);
     randArrMediumInt(c, d);
-    usleep(100);
+    usleep(10);
     endScope();
     gcActivate();
-    usleep(100);
+    usleep(10);
 }
 
 int main() {
     createMem(250 * 1024 * 1024, true);  // 250MB
     test();
     freeMem();
-    createMem(250 * 1024 * 1024, false);  // 250MB
-    test();
-    freeMem();
+    // createMem(250 * 1024 * 1024, false);  // 250MB
+    // test();
+    // freeMem();
 }

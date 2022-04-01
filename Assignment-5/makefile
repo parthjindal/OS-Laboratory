@@ -29,5 +29,5 @@ memlab.o: memlab.cc memlab.h debug.h
 	g++ $(FLAGS) -c memlab.cc
 
 clean:
-	rm -f demo1 demo2 demo3 demo1.o demo2.o demo3.o libmemlab.a memlab.o
+	rm -f demo1 demo2 demo3 demo1.o demo2.o demo3.o libmemlab.a memlab.o medium_int.o
 

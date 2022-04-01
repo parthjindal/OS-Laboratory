@@ -54,6 +54,7 @@ int main() {
     endScope();
     // usleep(200 * 1000);
     gcActivate();
+    usleep(10);
     // sleep(1);
     freeMem();
 }

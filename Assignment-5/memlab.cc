@@ -249,7 +249,7 @@ int MemBlock::getMem(int size) {
     }
     // if free block found, split it into two blocks (allocate and free) if possible
     splitBlock((int*)p, newsize);
-    fprintf(logfile, "%d\n", ((end - start) - totalFreeMem));
+    fprintf(logfile, "%ld\n", ((end - start) - totalFreeMem));
     LOG("MemBlock", _COLOR_BLUE, "Alloc %d bytes at address: %d\n", newsize, (int)(p - start) << 2);
     return (p - start);
 }
@@ -371,6 +371,7 @@ Ptr createVar(const Type& t) {
     int local_addr = symTable->alloc(wordid, 0);
     if (local_addr == -1)
         throw std::runtime_error("Out of memory in symbol table");
+    LOG("createVar", _COLOR_BLUE, "Created variable at local address: %d\n", translate2La(local_addr));
     PTHREAD_MUTEX_UNLOCK(&symTable->mutex);
     PTHREAD_MUTEX_UNLOCK(&mem->mutex);
     stack->push(local_addr);
@@ -404,6 +405,7 @@ ArrPtr createArr(const Type& t, int width) {
     int local_addr = symTable->alloc(wordid, 0);
     if (local_addr == -1)
         throw std::runtime_error("Out of memory in symbol table");
+    LOG("createArr", _COLOR_BLUE, "Created array at local address: %d\n", translate2La(local_addr));
     PTHREAD_MUTEX_UNLOCK(&symTable->mutex);
     PTHREAD_MUTEX_UNLOCK(&mem->mutex);
     stack->push(local_addr);
@@ -423,6 +425,7 @@ void getVar(const Ptr& p, void* val) {
     PTHREAD_MUTEX_LOCK(&mem->mutex);
     int* ptr = symTable->getPtr(local_addr);
     int temp = *(int*)ptr;
+    LOG("getVar", _COLOR_BLUE, "Copying 4 bytes from memory at logical address: %ld\n", (ptr - mem->start) << 2);
     if (p.type == Type::MEDIUM_INT) {
         if (temp & (1 << 23)) {
             temp = temp | 0xFF000000;
@@ -451,6 +454,7 @@ void getVar(const ArrPtr& p, int idx, void* val) {
     int offset = getOffsetForIdx(p.type, idx);
     ptr = ptr + word;
     int temp = *ptr;
+    LOG("getVar", _COLOR_BLUE, "Copying 4 bytes from memory at logical address: %ld\n", (ptr - mem->start) << 2);
     if (p.type == Type::BOOL) {
         bool b = temp & (1 << offset);
         memcpy(val, &b, 1);
@@ -474,6 +478,7 @@ void assignVar(const Ptr& p, int val) {
     PTHREAD_MUTEX_LOCK(&mem->mutex);
     int* ptr = symTable->getPtr(local_addr);
     memcpy((void*)ptr, &val, 4);
+    LOG("assignVar", _COLOR_BLUE, "Assigned 4 bytes to memory at logical address: %ld\n", (ptr - mem->start) << 2);
     PTHREAD_MUTEX_UNLOCK(&mem->mutex);
 }
 
@@ -491,10 +496,10 @@ void assignVar(const Ptr& p, medium_int val) {
         throw std::runtime_error("Assignment to non-int variable");
     PTHREAD_MUTEX_LOCK(&mem->mutex);
     int* ptr = symTable->getPtr(local_addr);
-    if (val.data[2] & (1 << 23)) {
-        val.data[2] = val.data[2] | 0xFF000000;
-    }
-    memcpy((void*)ptr, &val.data, 3);
+    int temp = val.to_int();
+    memcpy((void*)ptr, &temp, 4);
+    LOG("assignVar", _COLOR_BLUE, "Assigned 4 bytes to memory at logical address: %ld\n", (ptr - mem->start) << 2);
+
     PTHREAD_MUTEX_UNLOCK(&mem->mutex);
 }
 
@@ -514,6 +519,7 @@ void assignVar(const Ptr& p, bool f) {
     int* ptr = symTable->getPtr(local_addr);
     int temp = f ? 1 : 0;
     memcpy((void*)ptr, &temp, 4);
+    LOG("assignVar", _COLOR_BLUE, "Assigned 4 bytes to memory at logical address: %ld\n", (ptr - mem->start) << 2);
     PTHREAD_MUTEX_UNLOCK(&mem->mutex);
 }
 
@@ -533,6 +539,7 @@ void assignVar(const Ptr& p, char c) {
     int* ptr = symTable->getPtr(local_addr);
     int temp = c;
     memcpy((void*)ptr, &temp, 4);
+    LOG("assignVar", _COLOR_BLUE, "Assigned 4 bytes to memory at logical address: %ld\n", (ptr - mem->start) << 2);
     PTHREAD_MUTEX_UNLOCK(&mem->mutex);
 }
 
@@ -551,6 +558,7 @@ void assignArr(const ArrPtr& p, int idx, int val) {
         throw std::runtime_error("Assignment to non-int array");
     PTHREAD_MUTEX_LOCK(&mem->mutex);
     int* ptr = symTable->getPtr(local_addr);
+    LOG("assignArr", _COLOR_BLUE, "Assigned 4 bytes to memory at logical address: %ld\n", (ptr - mem->start) << 2);
     int word = getWordForIdx(p.type, idx);
     int offset = getOffsetForIdx(p.type, idx);
     ptr = (int*)((char*)ptr + word * 4 + offset);
@@ -573,6 +581,7 @@ void assignArr(const ArrPtr& p, int idx, medium_int val) {
         throw std::runtime_error("Assignment to non-medium-int array");
     PTHREAD_MUTEX_LOCK(&mem->mutex);
     int* ptr = symTable->getPtr(local_addr);
+    LOG("assignArr", _COLOR_BLUE, "Assigned 4 bytes to memory at logical address: %ld\n", (ptr - mem->start) << 2);
     int word = getWordForIdx(p.type, idx);
     int offset = getOffsetForIdx(p.type, idx);
     ptr = (int*)((char*)ptr + word * 4 + offset);
@@ -596,6 +605,7 @@ void assignArr(const ArrPtr& p, int idx, char c) {
         throw std::runtime_error("Assignment to non-char array");
     PTHREAD_MUTEX_LOCK(&mem->mutex);
     int* ptr = symTable->getPtr(local_addr);
+    LOG("assignArr", _COLOR_BLUE, "Assigned 4 bytes to memory at logical address: %ld\n", (ptr - mem->start) << 2);
     int word = getWordForIdx(p.type, idx);
     int offset = getOffsetForIdx(p.type, idx);
     ptr = ptr + word;
@@ -620,6 +630,7 @@ void assignArr(const ArrPtr& p, int idx, bool f) {
         throw std::runtime_error("Assignment to non-bool array");
     PTHREAD_MUTEX_LOCK(&mem->mutex);
     int* ptr = symTable->getPtr(local_addr);
+    LOG("assignArr", _COLOR_BLUE, "Assigned 4 bytes to memory at logical address: %ld\n", (ptr - mem->start) << 2);
     int word = getWordForIdx(p.type, idx);
     int offset = getOffsetForIdx(p.type, idx);
     ptr = ptr + word;
@@ -735,16 +746,20 @@ void assignArr(const ArrPtr& p, bool arr[], int n) {
 
 // marker for start of scope
 void initScope() {
+    LOG("initScope", _COLOR_BLUE, "Initializing scope\n");
     stack->push(-1);
 }
 
 // pop elements from stack until -1
 void endScope() {
+    LOG("endScope", _COLOR_BLUE, "Ending scope");
     while (stack->top() != -1) {
         int local_addr = stack->pop();
         PTHREAD_MUTEX_LOCK(&symTable->mutex);
-        if (symTable->isAllocated(local_addr))
+        if (symTable->isAllocated(local_addr)) {
+            LOG("Endscope", _COLOR_BLUE, "Popping local variable at address, unmarking for GC: %d", translate2La(local_addr));
             symTable->setUnmarked(local_addr);
+        }
         PTHREAD_MUTEX_UNLOCK(&symTable->mutex);
     }
     stack->pop();  // pop -1
@@ -766,9 +781,10 @@ void freeElem(const Ptr& p) {
     PTHREAD_MUTEX_LOCK(&symTable->mutex);
     int local_addr = translate2Idx(p.addr);
     if (symTable->isAllocated(local_addr)) {
+        LOG("FreeElem", _COLOR_BLUE, "Freeing variable at address %d", p.addr);
         _freeElem(local_addr);
     } else {
-        throw std::runtime_error("double free");
+        throw std::runtime_error("double free called");
     }
     PTHREAD_MUTEX_UNLOCK(&symTable->mutex);
     PTHREAD_MUTEX_UNLOCK(&mem->mutex);
